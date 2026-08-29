@@ -1,0 +1,70 @@
+# Cross-DC peering end-to-end stack: three real shim nodes that peer with each
+# other, exercised against the real HuggingFace CDN by run_e2e.py.
+#
+# Two URL spaces, deliberately different:
+#   - PUBLIC_BASE is HOST-facing (127.0.0.1:800x) because the *client* (the test
+#     driver on the host) follows the rewritten cas/xorb URLs.
+#   - PEERS / SELF_URL are CONTAINER-network-facing (http://node-x:8000) because
+#     the *shims* reach each other by compose service name.
+#
+#   docker compose -f deploy/e2e/docker-compose.yml up -d --build
+name: xet-e2e
+
+services:
+  node-a:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    image: xet-dc-cache:e2e
+    user: "0:0"  # e2e-only: write the host bind-mount despite Colima root:root mapping
+    environment:
+      PORT: "8000"
+      CACHE_DIR: /cache
+      PUBLIC_BASE: http://127.0.0.1:8001
+      PEERS: http://node-b:8000,http://node-c:8000
+      SELF_URL: http://node-a:8000
+      PEER_PROBE_TIMEOUT_MS: "500"
+      PEER_STICKY_TTL_SECONDS: "60"
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./caches/a:/cache
+    networks: [xet]
+
+  node-b:
+    image: xet-dc-cache:e2e
+    user: "0:0"  # e2e-only: write the host bind-mount despite Colima root:root mapping
+    environment:
+      PORT: "8000"
+      CACHE_DIR: /cache
+      PUBLIC_BASE: http://127.0.0.1:8002
+      PEERS: http://node-a:8000,http://node-c:8000
+      SELF_URL: http://node-b:8000
+      PEER_PROBE_TIMEOUT_MS: "500"
+      PEER_STICKY_TTL_SECONDS: "60"
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./caches/b:/cache
+    networks: [xet]
+
+  node-c:
+    image: xet-dc-cache:e2e
+    user: "0:0"  # e2e-only: write the host bind-mount despite Colima root:root mapping
+    environment:
+      PORT: "8000"
+      CACHE_DIR: /cache
+      PUBLIC_BASE: http://127.0.0.1:8003
+      PEERS: http://node-a:8000,http://node-b:8000
+      SELF_URL: http://node-c:8000
+      PEER_PROBE_TIMEOUT_MS: "500"
+      PEER_STICKY_TTL_SECONDS: "60"
+    ports:
+      - "8003:8000"
+    volumes:
+      - ./caches/c:/cache
+    networks: [xet]
+
+networks:
+  xet:
+    driver: bridge

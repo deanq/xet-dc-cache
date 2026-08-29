@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.parquet
+
+# Shim cache dir (default CACHE_DIR=./xorb-cache), wherever it's created
+xorb-cache/
+
+# Rust build artifacts (xet_verify) — 500 MB+, reproducible from Cargo.toml.
+# Cargo.lock is intentionally committed (pins transitive deps → reproducible builds).
+xet_verify/target/
+
+# Go build output
+shim-go/xetcache
+xetcache-linux-amd64

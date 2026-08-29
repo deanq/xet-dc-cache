@@ -1,0 +1,180 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A datacenter-local cache that lets stock HF/vLLM images pull Xet-backed models at
+LAN speed on serverless workers, buffering the WAN cold-start download tax.
+It works by transparent interception: a worker sets `HF_ENDPOINT` to the shim and
+all HuggingFace traffic flows through it — no image or client changes.
+
+The shim is a single **Go** binary (`shim-go/`, package `main`). It was originally
+a Python prototype, rewritten to Go as a 1:1 parity port; the Python offline tools
+(`tools/`) were kept because they bind a Rust chunker the Go shim doesn't need.
+
+## Commands
+
+```bash
+make build          # -> shim-go/xetcache
+make run            # foreground on :8000 (Ctrl-C)
+make start / stop / restart / status / logs / metrics / clean-cache
+make test           # cd shim-go && go test ./...
+make test-e2e       # cross-DC peering e2e: 3 peered containers vs real HF (Docker + network)
+```
+
+`make test-e2e` (harness in `deploy/e2e/`) builds a 3-node peered stack and drives
+real `hf_hub_download`s through it, asserting peer warm-hit (cold node pulls a warm
+peer's bytes, zero WAN, byte-identical), WAN fallback, and peers-down resilience.
+Override the model with `SMOKE_REPO`/`SMOKE_REV`/`SMOKE_PATH`. The nodes run as
+root and mount host bind-mounts under `deploy/e2e/caches/` (git-ignored) so the
+driver can reset them — that's e2e-only; production runs non-root.
+
+Go dev (from `shim-go/`):
+```bash
+go test ./...
+go test -run TestGetXorbMissThenHit ./...   # single test (by name)
+go test -race ./...                          # race detector — run this on concurrency changes
+go vet ./...
+```
+
+Live end-to-end acceptance (network; downloads ~269 MB a few times):
+```bash
+cd shim-go && uv run acceptance.py
+```
+It launches the binary, downloads a model through it vs directly, and asserts
+byte-identity + cache hits + restart-reuse. **Run each `hf_hub_download` in its own
+subprocess** — `huggingface_hub` fixes `HF_XET_CACHE`/cache paths once at import,
+so multiple downloads in one process silently share client-side cache (this is why
+the acceptance script forks per download; the deleted in-process Python tests could
+not test the Go binary for the same reason).
+
+Offline tools (`tools/`, PEP 723 `uv` scripts; `fsck.py` needs the Rust wheel):
+```bash
+uvx maturin@1 build --release -m xet_verify/Cargo.toml         # build the chunker wheel
+cd tools && uv run --with ../xet_verify/target/wheels/xet_verify-*.whl fsck.py --parity
+cd tools && uv run dedup_study.py probe org/model path         # cross-revision immutability probe
+```
+
+Feasibility study (`study/`, run from that dir — scripts read/write parquet in cwd):
+```bash
+cd study && uv run placement_locality_sim.py events.parquet --mode tier1 --ttl-hours 24
+```
+
+## The Xet protocol the shim mediates
+
+Understanding the three handlers requires understanding the download flow (all
+verified against the live API; see `docs/xet-cache-shim-design.md`):
+
+1. **token** — client GETs `.../xet-read-token/...`. The response carries the CAS
+   endpoint **both** in the body (`casUrl`) **and** in response headers
+   (`X-Xet-Cas-Url`, plus `X-Xet-Access-Token`/`X-Xet-Token-Expiration`). Current
+   `huggingface_hub` reads the **headers** (`parse_xet_connection_info_from_headers`),
+   so the `hub` handler must forward the upstream headers and rewrite
+   `X-Xet-Cas-Url` → `PUBLIC_BASE/cas` (it also rewrites the body `casUrl` for
+   back-compat), passing the access token/expiration through untouched. Dropping
+   the headers (e.g. returning only a rewritten body) breaks every download with
+   "Xet headers have not been correctly set by the server".
+2. **resolve** — a `302` carrying `X-Xet-Hash`; passes through untouched.
+3. **reconstruction** — `GET /cas/{v}/reconstructions/{file_id}` returns
+   `{terms, xorbs: {hash: [{url, ranges}]}}` where `url` is a signed CDN URL. The
+   relay rewrites each `url` → `PUBLIC_BASE/xorb/...` and stashes the signed URL.
+   **Reconstruction is Range-specific**: a request for a different byte range
+   returns different terms/offsets, so it must be cached keyed by the Range.
+4. **xorb fetch** — `GET /xorb/xorbs/default/{hash}` + `Range`; the store serves
+   from disk or replays the range against the stashed signed URL.
+
+`Server` (in `server.go`) plays all three roles: `hub` (`proxy.go`),
+`reconstruction` (`reconstruction.go`), `getXorb` (`xorb.go`).
+
+## Invariants that will bite you if changed
+
+These encode real bugs already fixed and a hard external constraint — a fresh
+reader will not infer them from any single file:
+
+- **On-disk format is a compatibility contract.** Xorb cache key =
+  `sha256("{hash}:{range}")` hex (`cachePath`, `util.go`); manifest filename =
+  `{version}_{fileID}_{sanitized-range or "full"}.json` (`manifests.go`, sanitize
+  `[^0-9A-Za-z_-]→_`). Unit tests pin these against literal values. Changing
+  either silently breaks reuse of a warm cache written by an older build. Peers
+  share this key, so the probe `HEAD` and fetch `GET` a peer receives resolve to
+  the exact same file a local request would — cross-node reuse needs both nodes on
+  the same key format.
+- **The token response must carry the Xet headers** (`X-Xet-Cas-Url` rewritten to
+  `PUBLIC_BASE/cas`; access token + expiration forwarded). Current `huggingface_hub`
+  reads connection info from these headers, not the body; the `hub` handler
+  (`proxy.go`) must not drop them (regression-tested in `proxy_test.go`).
+- **`fetchAuthorized` tries multiple signed URLs per xorb** (`xorb.go`). A xorb
+  spanning a segment boundary appears in several ranged reconstructions, each with
+  a CDN URL whose policy authorizes a *different* byte window. Keep a candidate
+  list; 409 if the hash is unknown, 502 only if none authorize. Do not collapse to
+  one URL.
+- **Reconstruction offline-serve is range-scoped and transport-only**
+  (`reconstruction.go`): serve a cached manifest *only* on a transport error and
+  *only* for the exact incoming Range. A reachable non-200 (e.g. 416) must be
+  propagated verbatim, never replaced with a cached manifest — otherwise the client
+  gets a range-incoherent reconstruction ("byte range not sequential").
+- **Cache writes are atomic** (`writeCacheFileAtomic`, `xorb.go`): temp file in the
+  same dir + rename, so a partial write never becomes a false HIT. `seedLRU`
+  (`main.go`) skips dotfiles for this reason (temp debris) and the `manifests`
+  subdir.
+- **HTTP client**: `CheckRedirect → http.ErrUseLastResponse` (no redirect
+  following — the 302 must reach the client), `DisableCompression`, and every
+  upstream request sets `Accept-Encoding: identity`.
+- **ServeMux (Go 1.22+)**: a `GET /` pattern also matches `HEAD`. Do NOT also
+  register `HEAD /` — it panics at startup. `GET /` alone serves HEAD-to-hub.
+- **`singleflight`** (`s.sf`) collapses concurrent cold fetches for the same
+  `(hash, range)`; inside the closure count `misses`/`wan_bytes` once,
+  `served_bytes` per caller (outside) so `wan_bytes_saved` stays correct under
+  fan-out.
+
+## Settled dead-ends — do not rebuild
+
+- **Content-address verification of downloads is not achievable** via the client
+  API (`X-Xet-Hash` is a server-side HMAC with an unshared salt; no reproducible
+  anchor). `xet_verify` exists only for offline chunk-parity/dedup analysis, not
+  download verification. See `docs/xet-cache-findings.md`.
+- **Tier 2 (chunk coalescing) was measured at ~0 payoff** for model serving
+  (weights are immutable across revisions, ~0% shared chunks across fine-tunes) and
+  was dropped from the Go shim. All real dedup is whole-file, captured by Tier 1.
+
+## Configuration
+
+Env vars (read in `main.go`): `HF_UPSTREAM`, `CAS_UPSTREAM`, `PUBLIC_BASE`,
+`CACHE_DIR`, `XORB_CACHE_MAX_GIB` (0 = unbounded), `SIGNED_URL_TTL_SECONDS`,
+`SIGNED_URL_MAX_ENTRIES`, `MANIFEST_CACHE_MAX_ENTRIES`, `PORT`,
+`MAX_INFLIGHT_FETCHES` (0 = unlimited; caps concurrent upstream misses),
+`SHIM_AUTH_TOKEN` (empty = open), `PEERS` (comma-separated sibling base URLs;
+empty = peering off), `SELF_URL` (filtered from `PEERS`),
+`PEER_PROBE_TIMEOUT_MS` (default 200), `PEER_STICKY_TTL_SECONDS` (default 60),
+`PEER_FETCH_TIMEOUT_MS` (default 10000; bounds the peer range GET request +
+body read, separate from the HEAD probe budget).
+**`PUBLIC_BASE` is baked into the rewritten URLs handed to clients**, so it
+must be reachable from the worker — set it explicitly for any non-localhost
+deployment.
+
+**Tier 1.5 peering**: on a miss the shim probes its `PEERS` (`HEAD` +
+`X-Xet-Peer: 1`, hit-or-404, one hop — a peer never re-fans-out or falls
+through to the CDN on a probe) and pulls from a warm one before hitting the
+CDN. Peer-served bytes count as `peer_bytes`, not `wan_bytes`; the decision
+metric for whether peering is paying for itself is `xet_peer_bytes_total`
+against `xet_wan_bytes_total`.
+
+Endpoints: `GET /healthz`, `GET /metrics` (JSON), `GET /metrics/prometheus`
+(text exposition, hand-rolled in `prometheus.go`), plus the three protocol
+handlers. Requests pass through `withLogging`→`withAuth` (`middleware.go`):
+slog JSON request logs, and — only when `SHIM_AUTH_TOKEN` is set — a Bearer gate
+that exempts `/healthz` and `/metrics*`. The shim forwards client HF tokens
+upstream over plaintext HTTP: it is a **trusted-LAN component** (trust boundary
+documented in `deploy/README.md`).
+
+## Layout
+
+- `shim-go/` — the cache service (Go). One file per concern; `*_test.go` alongside.
+- `tools/` — Python offline analysis tools; `xet_verify/` is the Rust pyo3 chunker they bind.
+- `study/` — Phase-1 feasibility sim ("is host-local caching worth building?"), independent of the shim.
+- `docs/` — design (`xet-cache-shim-design.md`), findings (`xet-cache-findings.md`),
+  the LFS follow-up (`lfs-support-handoff.md`), and `superpowers/` (the Go-rewrite spec/plan/notes).
+
+Follow-up work is scoped in `docs/lfs-support-handoff.md` (add git-LFS caching for
+un-migrated repos) — written against the Go shim.

@@ -1,0 +1,50 @@
+[Unit]
+Description=Xet DC cache (transparent HF Xet range cache for serverless workers)
+Documentation=https://github.com/deanq/xet-dc-cache
+After=network-online.target
+Wants=network-online.target
+# Crash-loop guard lives in [Unit] in modern systemd: >5 restarts in 60s -> stop
+# trying (so a misconfig doesn't hammer upstreams). Recover with `systemctl reset-failed`.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Non-root service account (create once: see deploy/README.md).
+User=xetcache
+Group=xetcache
+
+# Config lives here, not in this unit — edit the env file, not the service.
+# "-" prefix: unit still starts if the file is absent (built-in defaults apply),
+# but PUBLIC_BASE almost always needs setting for remote workers.
+EnvironmentFile=-/etc/xet-dc-cache/xet-dc-cache.env
+
+ExecStart=/usr/local/bin/xetcache
+WorkingDirectory=/var/lib/xet-dc-cache
+
+# Crash / OOM / kill -> come back up. No graceful drain: in-flight range
+# fetches are idempotent GETs the client re-issues on connection reset.
+Restart=always
+RestartSec=2
+
+# --- Sandboxing (defense in depth; the shim only needs its cache dir) ---
+# CACHE_DIR must live under one of the writable paths below. Defaults:
+#   StateDirectory   -> /var/lib/xet-dc-cache   (WorkingDirectory)
+#   CacheDirectory   -> /var/cache/xet-dc-cache (recommended CACHE_DIR)
+StateDirectory=xet-dc-cache
+CacheDirectory=xet-dc-cache
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

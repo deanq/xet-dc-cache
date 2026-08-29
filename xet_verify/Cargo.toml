@@ -1,0 +1,20 @@
+[package]
+name = "xet_verify"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "pyo3 wrapper over xet-core's CDC chunker + file-hash, pinned to hf-xet v1.6.0"
+
+[lib]
+name = "xet_verify"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
+
+# Pinned to the exact xet-core release the workers' hf-xet 1.6.0 is built from.
+# The chunker params (gearhash mask, min/target/max chunk size) MUST match the
+# client byte-for-byte or every recomputed hash diverges. Bump this in lockstep
+# with the fleet's hf-xet, and let CI re-prove parity (see xet_verify/README.md).
+xet-data = { git = "https://github.com/huggingface/xet-core.git", tag = "v1.6.0" }
+xet-core-structures = { git = "https://github.com/huggingface/xet-core.git", tag = "v1.6.0" }

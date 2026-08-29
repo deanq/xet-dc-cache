@@ -1,0 +1,2 @@
+# Bind-mounted per-node xorb caches (runtime scratch).
+caches/

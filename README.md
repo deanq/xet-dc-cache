@@ -140,4 +140,5 @@ sim reads the identical schema. The `*.parquet` files are gitignored.
   See `docs/xet-cache-findings.md`.
 - **Content-address verification:** found **not achievable** via the client API
   (`X-Xet-Hash` is a server-side HMAC; no reproducible anchor). `docs/xet-cache-findings.md`.
-- **Next (optional):** git-LFS caching for un-migrated repos — `docs/lfs-support-handoff.md`.
+- **Next (optional):** git-LFS-bridge caching — only pays off for non-Xet client
+  stacks, not for a repo class (all repos are Xet-enabled). `docs/lfs-support-handoff.md`.

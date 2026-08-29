@@ -12,12 +12,31 @@ the shim already implements).
 
 ## Why
 
-The shim caches the **Xet** download path today. Repos not yet migrated to Xet
-(the shrinking long tail, opted-out, some private) still serve weights via
-**git-LFS**. Those downloads currently pass straight through the `hub` handler to
-the CDN — they work, but they are **uncached**, so they pay the full WAN tax on
-every cold worker. Goal: cache LFS objects too, with the same cross-worker /
-cross-revision dedup we get for Xet.
+The shim caches the **Xet** download path today. When a worker's client is **not
+Xet-aware**, the same repo is instead served over HF's **git-LFS bridge** (a
+`302` to a presigned CDN URL). Those downloads currently pass straight through the
+`hub` handler to the CDN — they work, but they are **uncached**, so they pay the
+full WAN tax on every cold worker. Goal: cache LFS objects too, with the same
+cross-worker / cross-revision dedup we get for Xet.
+
+**Read this before you build it — the trigger is the client, not the repo.**
+As of 2026 HF's migration is default-on and auto-migrating: *"all repositories on
+the Hub are now Xet-enabled,"* and every repo is **dual-available** — a Xet-aware
+client (`huggingface_hub` ≥0.32 + `hf_xet`) reconstructs from CAS/xorbs (the path
+the shim already caches), while any other client transparently gets the *same
+file* through the LFS bridge. There is **no permanent un-migrated repo class** to
+chase; the LFS path fires only for a non-Xet **client configuration**:
+
+- old `huggingface_hub`, or `hf_xet` not installed;
+- `HF_HUB_DISABLE_XET=1` set on the worker (note: this flag has been observed
+  broken — huggingface_hub #3266, v0.34.1 — so it can't always even force the
+  path for testing).
+
+So the deciding question is **"do any of your workers ship a non-Xet client
+stack?"** If every worker image carries a modern `huggingface_hub` + `hf_xet`
+(the current default), the LFS bridge is essentially never hit and this feature is
+dead code. Build it only if you have — or expect — workers pinned to old clients,
+missing `hf_xet`, or running with Xet disabled.
 
 This is **purely additive**. Do not change the Xet path or the LFS passthrough
 fallback; if anything here fails, LFS must still degrade to "works, uncached."
@@ -152,10 +171,12 @@ common `hf_hub_download` case); document ranged as best-effort.
   `huggingface_hub` computes `HF_XET_CACHE`/cache paths once at import, so multiple
   downloads in one process silently share client-side cache (this bit
   `acceptance.py`; see `docs/superpowers/plans/notes-go-acceptance.md`).
-- **Finding a non-Xet repo is now hard** (HF migrated even bert/gpt2). Force the
-  LFS branch by setting `HF_HUB_DISABLE_XET=1` on the client — it then follows the
-  `302`/LFS path even for Xet-backed repos, exercising `/lfs` end-to-end. Failing
-  that, hunt a still-LFS repo (private/older/opted-out).
+- **You cannot find a non-Xet repo — they no longer exist as a class** (all repos
+  are Xet-enabled; every repo is dual-available via the LFS bridge). Exercise the
+  LFS branch by making the *client* non-Xet: set `HF_HUB_DISABLE_XET=1`, which
+  makes it follow the `302`/LFS bridge for any repo. Caveat: this flag was broken
+  in huggingface_hub v0.34.1 (#3266) — if it doesn't take effect, pin a version
+  where it works or uninstall `hf_xet` to force the legacy path.
 - **Regression**: the existing Go suite (`cd shim-go && go test ./...`, plus
   `go test -race ./...`) must stay green, and `shim-go/acceptance.py` (Xet path)
   must still pass.
@@ -198,10 +219,16 @@ common `hf_hub_download` case); document ranged as best-effort.
 
 ## Strategic note
 
-HF's aggressive Xet migration is shrinking the LFS long tail — the Xet path the
-shim already ships covers the overwhelming majority of popular-model pulls. Build
-this for completeness and unconverted repos, but weigh the priority against your
-actual workload. In Go it's genuinely cheap: mostly reuse, and the two things that
-were *hard* in the Python design — bounded-memory streaming and collapsing
+HF's Xet migration is **complete-by-default** — there is no shrinking "LFS long
+tail" of un-migrated repos to serve, because every repo is Xet-enabled and
+dual-available. The Xet path the shim already ships therefore covers the
+overwhelming majority of real pulls. The residual value of LFS caching is **not
+about repos, it is about clients**: it only pays off for workers that run a
+non-Xet client stack (old `huggingface_hub`, no `hf_xet`, or `HF_HUB_DISABLE_XET`).
+Weigh the priority against whether your fleet actually contains any such workers;
+if it doesn't, this is dead code.
+
+If you do build it, in Go it's genuinely cheap: mostly reuse, and the two things
+that were *hard* in the Python design — bounded-memory streaming and collapsing
 concurrent cold fetches — are `io.MultiWriter` and the already-present `s.sf`
 respectively.

@@ -176,5 +176,7 @@ documented in `deploy/README.md`).
 - `docs/` — design (`xet-cache-shim-design.md`), findings (`xet-cache-findings.md`),
   the LFS follow-up (`lfs-support-handoff.md`), and `superpowers/` (the Go-rewrite spec/plan/notes).
 
-Follow-up work is scoped in `docs/lfs-support-handoff.md` (add git-LFS caching for
-un-migrated repos) — written against the Go shim.
+Follow-up work is scoped in `docs/lfs-support-handoff.md` (add git-LFS-bridge
+caching) — written against the Go shim. Note its premise correction: all HF repos
+are Xet-enabled and dual-available, so LFS caching only matters for non-Xet
+*client* stacks, not for any un-migrated repo class.

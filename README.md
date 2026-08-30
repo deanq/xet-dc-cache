@@ -102,6 +102,36 @@ The decision metric for whether peering earns its keep is `xet_peer_bytes_total`
 against `xet_wan_bytes_total` — the fraction of cold-miss bytes the mesh caught
 instead of the CDN.
 
+### Eviction & disk safety
+
+A DC cache accumulates every model variant its workers pull, so it needs a bound.
+Tier 1 is an **LRU keyed by `(hash, range)`** with byte-accurate accounting that
+survives restart (rebuilt from disk mtime at boot). Two independent limits trigger
+eviction of the least-recently-used entries — whichever bites first:
+
+- **`XORB_CACHE_MAX_GIB`** — an optional logical **byte budget**. `0` (default) =
+  no byte budget. Set this if you want the cache to stay within a fixed size.
+- **`CACHE_MIN_FREE_PCT`** — an always-on **disk-free watermark** (default `10`):
+  keep at least this % of the *volume* free. Because it measures real free space
+  (via `statfs`), it adapts to any disk size, protects against a full disk even if
+  byte accounting drifts, and coexists with anything else sharing the volume.
+  Set `0` to disable and rely solely on the byte budget.
+
+```mermaid
+flowchart TD
+    W["Cache a xorb range<br/>(record size, mark MRU)"] --> C{"Byte budget exceeded?<br/>total &gt; XORB_CACHE_MAX_GIB"}
+    C -- "yes" --> EV["Evict least-recently-used entry<br/>delete file · free real disk"]
+    C -- "no" --> D{"Volume below free floor?<br/>free &lt; CACHE_MIN_FREE_PCT"}
+    D -- "yes" --> EV
+    D -- "no" --> DONE["Done"]
+    EV --> C
+```
+
+> **Deploy note:** the disk-free watermark is on by default, so the cache can't
+> fill the volume out of the box. For a fixed-size cache also set
+> `XORB_CACHE_MAX_GIB` to a value comfortably below the NVMe size (e.g. leave
+> headroom for a few of your largest models plus the working set).
+
 ---
 
 ## Project layout

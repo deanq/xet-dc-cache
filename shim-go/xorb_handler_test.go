@@ -27,7 +27,7 @@ func newXorbTestServer(t *testing.T, doer httpDoer) *Server {
 		cacheDir:         dir,
 		signed:           NewTTLMap(3600e9, 100000, nil),
 		metrics:          NewMetrics(),
-		lru:              newLRU(0, func(string) {}),
+		lru:              newLRU(0, 0, nil, func(string) {}),
 		doer:             doer,
 		signedCandidates: 8,
 	}

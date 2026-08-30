@@ -9,7 +9,7 @@ func TestPrometheusText(t *testing.T) {
 	s := &Server{
 		metrics: NewMetrics(),
 		signed:  NewTTLMap(3600e9, 100, nil),
-		lru:     newLRU(0, func(string) {}),
+		lru:     newLRU(0, 0, nil, func(string) {}),
 	}
 	s.metrics.Incr("hits", 3)
 	s.metrics.Incr("misses", 1)
@@ -38,7 +38,7 @@ func TestPrometheusText(t *testing.T) {
 // Every metric must carry a TYPE line (scrapers reject bare samples in strict
 // mode) — guard against adding a sample without its header.
 func TestPrometheusEveryMetricHasType(t *testing.T) {
-	s := &Server{metrics: NewMetrics(), signed: NewTTLMap(1, 1, nil), lru: newLRU(0, func(string) {})}
+	s := &Server{metrics: NewMetrics(), signed: NewTTLMap(1, 1, nil), lru: newLRU(0, 0, nil, func(string) {})}
 	types := strings.Count(s.prometheusText(), "# TYPE ")
 	samples := 0
 	for _, line := range strings.Split(strings.TrimSpace(s.prometheusText()), "\n") {

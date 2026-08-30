@@ -141,7 +141,9 @@ reader will not infer them from any single file:
 ## Configuration
 
 Env vars (read in `main.go`): `HF_UPSTREAM`, `CAS_UPSTREAM`, `PUBLIC_BASE`,
-`CACHE_DIR`, `XORB_CACHE_MAX_GIB` (0 = unbounded), `SIGNED_URL_TTL_SECONDS`,
+`CACHE_DIR`, `XORB_CACHE_MAX_GIB` (0 = no byte budget), `CACHE_MIN_FREE_PCT`
+(default 10; always-on disk-free watermark via `statfs`, 0 = disable),
+`SIGNED_URL_TTL_SECONDS`,
 `SIGNED_URL_MAX_ENTRIES`, `MANIFEST_CACHE_MAX_ENTRIES`, `PORT`,
 `MAX_INFLIGHT_FETCHES` (0 = unlimited; caps concurrent upstream misses),
 `SHIM_AUTH_TOKEN` (empty = open), `PEERS` (comma-separated sibling base URLs;

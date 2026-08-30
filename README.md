@@ -9,6 +9,101 @@ users who bring a pre-built vLLM image get it for free.
 
 ---
 
+## How it works
+
+### Topology — where the shim sits
+
+Each worker points `HF_ENDPOINT` at a datacenter-local shim, so all HuggingFace
+traffic flows through it. The shim serves cached xorb ranges from local disk;
+on a miss it can pull from a **sibling shim** over a private backbone (Tier 1.5)
+before paying the WAN cost of the CDN.
+
+```mermaid
+flowchart LR
+    subgraph DCA["Datacenter A"]
+        W["Worker<br/>stock HF / vLLM image"]
+        S["xet-dc-cache shim<br/>Hub proxy · CAS relay · Tier 1 cache"]
+        W -- "HF_ENDPOINT" --> S
+    end
+    subgraph DCB["Datacenter B — sibling"]
+        P["Peer shim<br/>warm Tier 1 cache"]
+    end
+    HUB["HF Hub<br/>token · resolve · reconstruction"]
+    CDN["Xet CDN<br/>signed xorb ranges"]
+
+    S -. "Tier 1.5 · X-Xet-Peer probe<br/>private backbone" .-> P
+    S -- "cold miss · control plane" --> HUB
+    S -- "cold miss · WAN bytes" --> CDN
+```
+
+### The download protocol (client → shim → CDN)
+
+A Xet download is a four-step dance. The shim proxies the first three (rewriting
+URLs so the client keeps talking to the shim) and caches the fourth — the actual
+bytes.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client<br/>(huggingface_hub)
+    participant S as Shim
+    participant H as HF Hub
+    participant CDN as Xet CDN
+
+    Note over C,CDN: 1 · token — learn where CAS lives
+    C->>S: GET .../xet-read-token/...
+    S->>H: proxy
+    H-->>S: 200 + X-Xet-Cas-Url + access token
+    S-->>C: 200 · X-Xet-Cas-Url rewritten → shim/cas
+
+    Note over C,CDN: 2 · resolve — get the file's Xet hash
+    C->>S: GET /{repo}/resolve/{rev}/{path}
+    S->>H: proxy
+    H-->>S: 302 + X-Xet-Hash
+    S-->>C: 302 (passthrough)
+
+    Note over C,CDN: 3 · reconstruction — xorb ranges for this byte range
+    C->>S: GET /cas/{v}/reconstructions/{file_id} + Range
+    S->>H: relay to CAS
+    H-->>S: {terms, xorbs: {hash: [{url, ranges}]}}
+    S->>S: rewrite each url → shim/xorb · stash signed URL
+    S-->>C: rewritten reconstruction
+
+    Note over C,CDN: 4 · xorb fetch — the cached hot path (see next diagram)
+    C->>S: GET /xorb/xorbs/default/{hash} + Range
+    S-->>C: 206 bytes
+```
+
+### The xorb miss path (Tier 1 → Tier 1.5 → CDN)
+
+Step 4 above is where caching happens. Peering is a strict accelerator: every
+peer failure mode falls through to the CDN, so a request can never *fail* that the
+CDN would have served.
+
+```mermaid
+flowchart TD
+    A["GET /xorb/xorbs/default/{hash} + Range"] --> B{"On local disk?"}
+    B -- "yes" --> HIT["Serve 206 from disk<br/>Tier 1 HIT"]
+    B -- "no" --> C{"PEERS configured?"}
+    C -- "no" --> CDN["CDN fetch via stashed signed URL"]
+    C -- "yes" --> D{"Sticky peer live?"}
+    D -- "yes" --> G["GET range from peer<br/>X-Xet-Peer: 1"]
+    D -- "no" --> E["Fan-out HEAD probe<br/>hit-or-404 · one hop"]
+    E --> F{"Any peer 206<br/>within budget?"}
+    F -- "yes" --> G
+    F -- "no / timeout" --> CDN
+    G --> J{"Peer transfer OK?"}
+    J -- "yes" --> P1["Cache atomically → serve<br/>counts as peer_bytes"]
+    J -- "no / short read" --> CDN
+    CDN --> W1["Cache atomically → serve<br/>counts as wan_bytes"]
+```
+
+The decision metric for whether peering earns its keep is `xet_peer_bytes_total`
+against `xet_wan_bytes_total` — the fraction of cold-miss bytes the mesh caught
+instead of the CDN.
+
+---
+
 ## Project layout
 
 ```

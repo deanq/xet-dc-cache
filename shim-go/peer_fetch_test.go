@@ -154,7 +154,7 @@ func TestGetXorbServesFromPeerEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &Server{
-		cacheDir: warmDir, metrics: NewMetrics(), lru: newLRU(0, func(string) {}),
+		cacheDir: warmDir, metrics: NewMetrics(), lru: newLRU(0, 0, nil, func(string) {}),
 		signed: NewTTLMap(3600e9, 100, nil), doer: &countingDoer{}, signedCandidates: 8,
 	}
 	mux := http.NewServeMux()
@@ -166,7 +166,7 @@ func TestGetXorbServesFromPeerEndToEnd(t *testing.T) {
 	// httptest peer. A has no signed URLs, so any CDN fallback would 409 —
 	// a 206 therefore proves the peer path served it.
 	a := &Server{
-		cacheDir: t.TempDir(), metrics: NewMetrics(), lru: newLRU(0, func(string) {}),
+		cacheDir: t.TempDir(), metrics: NewMetrics(), lru: newLRU(0, 0, nil, func(string) {}),
 		signed: NewTTLMap(3600e9, 100, nil), doer: http.DefaultClient, signedCandidates: 8,
 		peers: staticPeers{list: []string{ts.URL}}, sticky: newStickyPeer(time.Minute, nil),
 		peerProbeTimeout: time.Second,

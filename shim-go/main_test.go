@@ -22,7 +22,7 @@ func TestSeedLRUSkipsTempFiles(t *testing.T) {
 
 	s := &Server{
 		cacheDir: dir,
-		lru:      newLRU(0, func(string) {}),
+		lru:      newLRU(0, 0, nil, func(string) {}),
 	}
 	seedLRU(s)
 

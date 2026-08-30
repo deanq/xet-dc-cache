@@ -38,9 +38,43 @@ func main() {
 	maxGiB, _ := strconv.ParseFloat(env("XORB_CACHE_MAX_GIB", "0"), 64)
 	maxBytes := int64(maxGiB * float64(1<<30))
 
+	// Disk-free watermark: an always-on backstop so the cache can never fill the
+	// volume, independent of the byte budget. It measures real free space (so it
+	// adapts to any disk size and self-corrects if byte accounting drifts). Set
+	// CACHE_MIN_FREE_PCT=0 to disable and rely solely on XORB_CACHE_MAX_GIB.
+	minFreePct := envInt("CACHE_MIN_FREE_PCT", 10)
+	if minFreePct >= 100 {
+		slog.Warn("CACHE_MIN_FREE_PCT >= 100 would evict everything; clamping to 99", "requested", minFreePct)
+		minFreePct = 99
+	}
+	if minFreePct < 0 {
+		slog.Warn("CACHE_MIN_FREE_PCT < 0 is invalid; disabling disk-free watermark", "requested", minFreePct)
+		minFreePct = 0
+	}
+	var minFree int64
+	var freeFn func() int64
+	if minFreePct > 0 {
+		// Computed once: the volume's total size is fixed for the process's life
+		// (a disk resize needs a restart to take effect).
+		if _, total, ok := diskAvailBytes(cacheDir); ok {
+			minFree = total * int64(minFreePct) / 100
+			freeFn = func() int64 {
+				avail, _, ok := diskAvailBytes(cacheDir)
+				if !ok {
+					return 1 << 62 // stat failed: report "plenty free" so a transient error never triggers a false purge
+				}
+				return avail
+			}
+		} else {
+			slog.Warn("disk-free watermark disabled: cannot stat cache volume", "cache_dir", cacheDir)
+		}
+	}
+
 	metrics := NewMetrics()
-	lru := newLRU(maxBytes, func(name string) {
-		_ = os.Remove(filepath.Join(cacheDir, name))
+	lru := newLRU(maxBytes, minFree, freeFn, func(name string) {
+		if err := os.Remove(filepath.Join(cacheDir, name)); err != nil && !os.IsNotExist(err) {
+			slog.Warn("lru evict: remove failed", "file", name, "err", err)
+		}
 	})
 
 	// Concurrency cap on distinct upstream miss fetches (0 = unlimited). Bounds
@@ -116,7 +150,8 @@ func main() {
 	port := env("PORT", "8000")
 	slog.Info("xet-dc-cache starting",
 		"port", port, "public_base", s.publicBase, "cache_dir", cacheDir,
-		"max_gib", maxGiB, "max_inflight_fetches", cap(sem), "auth", s.authToken != "",
+		"max_gib", maxGiB, "min_free_pct", minFreePct, "min_free_bytes", minFree,
+		"max_inflight_fetches", cap(sem), "auth", s.authToken != "",
 		"peers", len(peerList))
 	if err := http.ListenAndServe("0.0.0.0:"+port, handler); err != nil {
 		log.Fatal(err)

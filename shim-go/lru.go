@@ -106,7 +106,10 @@ func (c *lruCache) evictLocked() {
 
 // overLimitLocked reports whether either limit is currently exceeded: the byte
 // budget, or the disk-free watermark. freeFn is re-read each call so the loop in
-// evictLocked stops as soon as enough real disk has been reclaimed.
+// evictLocked stops as soon as enough real disk has been reclaimed. The byte
+// budget is checked first, so freeFn (a statfs syscall) only runs once the
+// budget is satisfied. Statfs is a local ~microsecond call and miss fetches are
+// concurrency-capped, so we accept it in the locked path rather than sampling.
 func (c *lruCache) overLimitLocked() bool {
 	if c.max > 0 && c.total > c.max {
 		return true

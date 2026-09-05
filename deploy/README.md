@@ -94,9 +94,13 @@ manifest is deferred to Step 3 so it's shaped by the topology decision.
   series `xet_peer_hedge_fired_total`, `xet_peer_hedge_peer_won_total`,
   `xet_peer_hedge_cdn_won_total`, `xet_peer_bytes_wasted_total`, and the gauge
   `xet_peer_throughput_bytes_per_ms`. Compare `xet_peer_bytes_total` against
-  `xet_wan_bytes_total` to judge whether peering is paying for itself; watch
-  `xet_peer_bytes_wasted_total` / `xet_peer_hedge_fired_total` to tune
-  `PEER_HEDGE_FACTOR`.
+  `xet_wan_bytes_total` to judge whether peering is paying for itself. To tune
+  `PEER_HEDGE_FACTOR`, watch the ratio
+  `xet_peer_hedge_peer_won_total / xet_peer_hedge_fired_total` — the fraction of
+  fired hedges the peer went on to win anyway (i.e. the CDN pull was wasted
+  effort); a high ratio means the head start is too short. `xet_peer_bytes_wasted_total`
+  reports the actual CDN bytes transferred before those losing pulls were
+  cancelled (the real cost of the insurance), not the requested range size.
 - Logs are structured JSON on stderr (slog): one `request` line per request with
   `status`, `x_cache`, `bytes`, `dur_ms`. Under systemd they land in the journal
   (`journalctl -u xet-dc-cache -o cat | jq`).

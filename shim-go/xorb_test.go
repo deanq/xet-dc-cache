@@ -101,9 +101,9 @@ func TestFetchAuthorizedHonorsContext(t *testing.T) {
 func TestCdnGetReturnsBody(t *testing.T) {
 	s := newXorbTestServer(t, &countingDoer{})
 	s.signed.Set("h", []string{"http://cdn/x"})
-	res, ok := s.cdnGet(context.Background(), "h", "bytes=0-4")
-	if !ok || string(res.body) != "BYTES" {
-		t.Fatalf("cdnGet = (%q,%v), want BYTES,true", res.body, ok)
+	res, n, ok := s.cdnGet(context.Background(), "h", "bytes=0-4")
+	if !ok || string(res.body) != "BYTES" || n != 5 {
+		t.Fatalf("cdnGet = (%q,%d,%v), want BYTES,5,true", res.body, n, ok)
 	}
 }
 

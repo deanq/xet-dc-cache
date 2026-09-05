@@ -59,23 +59,27 @@ func (s *Server) fetchAuthorized(ctx context.Context, hash, byteRange string) (*
 
 // cdnGet is the CDN side of the hedged race: acquire a fetch slot, pull the
 // authorized range, read the body. Best-effort — any failure (including ctx
-// cancellation when the peer wins the race) returns (zero, false); the plain
-// miss path keeps surfacing typed errors itself.
-func (s *Server) cdnGet(ctx context.Context, hash, byteRange string) (xorbResult, bool) {
+// cancellation when the peer wins the race) returns (zero, n, false); the plain
+// miss path keeps surfacing typed errors itself. The returned int64 is the
+// number of body bytes actually read, INCLUDING on the cancelled/error path
+// (io.ReadAll returns what it read so far) — the caller books it as the true
+// wasted-transfer cost of a lost hedge, not the requested range size.
+func (s *Server) cdnGet(ctx context.Context, hash, byteRange string) (xorbResult, int64, bool) {
 	if err := s.acquire(ctx); err != nil {
-		return xorbResult{}, false
+		return xorbResult{}, 0, false
 	}
 	defer s.release()
 	resp, err := s.fetchAuthorized(ctx, hash, byteRange)
 	if err != nil {
-		return xorbResult{}, false
+		return xorbResult{}, 0, false
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
+	n := int64(len(body))
 	if err != nil {
-		return xorbResult{}, false
+		return xorbResult{}, n, false
 	}
-	return xorbResult{body: body, contentRange: resp.Header.Get("Content-Range")}, true
+	return xorbResult{body: body, contentRange: resp.Header.Get("Content-Range")}, n, true
 }
 
 // isPeerRequest reports whether this request came from a sibling cache. Such

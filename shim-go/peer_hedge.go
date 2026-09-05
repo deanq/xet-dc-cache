@@ -23,9 +23,10 @@ func rangeSize(byteRange string) int64 {
 }
 
 type raceResult struct {
-	res xorbResult
-	src hedgeSource
-	ok  bool
+	res   xorbResult
+	src   hedgeSource
+	ok    bool
+	bytes int64 // body bytes read (used to book true CDN waste on a lost hedge)
 }
 
 // raceOnePeer fires the peer GET to base and gives it an adaptive head start
@@ -73,8 +74,8 @@ func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) 
 	s.metrics.Incr("peer_hedge_fired", 1)
 	cdnCh := make(chan raceResult, 1)
 	go func() {
-		res, ok := s.cdnGet(ctx, hash, byteRange)
-		cdnCh <- raceResult{res: res, src: srcCDN, ok: ok}
+		res, n, ok := s.cdnGet(ctx, hash, byteRange)
+		cdnCh <- raceResult{res: res, src: srcCDN, ok: ok, bytes: n}
 	}()
 
 	for {
@@ -83,7 +84,14 @@ func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) 
 			if o.ok {
 				cancel() // stop the CDN loser
 				s.metrics.Incr("peer_hedge_peer_won", 1)
-				s.metrics.Incr("peer_bytes_wasted", size) // CDN range discarded
+				// Book the CDN bytes actually transferred before cancellation
+				// (the true waste), not the requested range size. Draining
+				// cdnCh here is bounded by cancellation latency — we already
+				// cancel()'d, so the CDN read unwinds promptly; we are NOT
+				// waiting for the CDN download to finish.
+				if c := <-cdnCh; c.bytes > 0 {
+					s.metrics.Incr("peer_bytes_wasted", c.bytes)
+				}
 				return o.res, srcPeer, true
 			}
 			// Peer failed after the hedge; the CDN is our only hope.

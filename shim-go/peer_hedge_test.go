@@ -83,7 +83,7 @@ func newHedgeServer(d *hedgeDoer, timer chan time.Time) *Server {
 
 func TestRaceFastPeerNoCDN(t *testing.T) {
 	peerRel := make(chan struct{})
-	close(peerRel)                 // peer completes immediately
+	close(peerRel)                // peer completes immediately
 	timer := make(chan time.Time) // never fires
 	d := &hedgeDoer{peerRelease: peerRel, body: "BYTES", peerHas: true}
 	s := newHedgeServer(d, timer)

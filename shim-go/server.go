@@ -116,4 +116,3 @@ func (s *Server) now() time.Time {
 	}
 	return time.Now()
 }
-

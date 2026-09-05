@@ -335,6 +335,23 @@ suite + `go vet` + `gofmt` green throughout). Summary:
 | 8 | No graceful shutdown | **Fixed.** `http.Server.Shutdown` on SIGTERM/SIGINT (25s drain); keepalive gets a real stop channel. |
 | 13 | Server god-struct | **Deferred** (intentional). Large mechanical refactor across every handler + test constructor, zero behavior change, low value; the finding itself said "don't do speculatively." Left for a supervised session. |
 
+### Whole-branch review outcome
+
+A fresh reviewer traced the full branch diff. One **Important** finding was raised and **fixed**:
+the peer-win path drained the cancelled CDN result *synchronously*, blocking the client's response
+on CDN connection teardown (unbounded) and undercutting the hedge's latency purpose — now drained
+in a goroutine (buffered channel, no leak; test polls the eventually-booked metric). The histogram,
+auth gate, graceful shutdown, and manifest FIFO were all reviewed and found logically sound (no
+deadlock, no goroutine leak, correct bucket math, safe unlocked Get, single-close stop channel).
+
+**Parked minors** (low value, intentionally not changed): `peer_hedge_fired` counts timer-fired
+even when a saturated pool makes the hedge skip the CDN (observability skew only — the counter means
+"timer fired" by its HELP); `manifests.trimLocked` drops an entry from tracking even if `os.Remove`
+fails (rare, single-process, would orphan a file outside the budget); `seedFromDisk` mtime ties sort
+nondeterministically on coarse-mtime filesystems (trims to the right count, maybe not the true
+oldest); `contentRangeForHit` returns "" on an unparseable Range (theoretical — such a request
+wouldn't have a matching cache entry).
+
 ### New finding discovered during validation (NOT yet fixed)
 
 **Content-Length stripping breaks HEAD metadata for non-LFS small files (Medium, needs impact check).**

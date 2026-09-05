@@ -313,3 +313,37 @@ download content-verification (`X-Xet-Hash` is an unshared-salt HMAC). Both corr
   How reachable that is in prod depends on CDN reliability; I'm flagging the structural possibility, not
   claiming it's common.
 - Everything else I traced directly in-source and/or against the passing `-race` suite; those I'm confident on.
+
+---
+
+## Implementation update (2026-09-05)
+
+Findings #1–#11 were worked on branch `fix/eval-findings` (one commit per finding; full `-race`
+suite + `go vet` + `gofmt` green throughout). Summary:
+
+| # | Finding | Resolution |
+|---|---------|-----------|
+| 1 | `SHIM_AUTH_TOKEN` breaks downloads | **Fixed.** Gate now applies to the peer channel (`X-Xet-Peer:1`) only; client traffic is ungated (network-isolation posture). **Validated end-to-end**: `acceptance.py` (now with `SHIM_AUTH_TOKEN` set) passes on the real Xet download of `model.safetensors` — byte-identical, hits, restart reuse. |
+| 3 | `peer_bytes_wasted` overcount | **Fixed.** `cdnGet` reports bytes actually read; the peer-win path books that (drained after cancel), not the range size. |
+| 2+4 | Hedge shares fetch semaphore / 2× RAM | **Fixed** (starvation): `cdnGet` uses a non-blocking `tryAcquire`; RAM 2× documented in env.example. |
+| 5 | Per-request vs per-race bound | **Docs corrected** (CLAUDE.md, README, code comment). The fallthrough is legitimate CDN-failure resilience; kept, wording made honest. |
+| 6 | No latency histogram / per-peer | **Fixed.** Added `xet_xorb_latency_ms` histogram by source, per-peer throughput gauge, and `xet_peer_hedge_cdn_bytes_total` to de-conflate `wan_bytes`. |
+| 7 | Manifest cache non-atomic + O(n) trim | **Fixed.** Atomic temp+rename; in-memory FIFO seeded from disk, O(1) amortized trim. |
+| 11 | 206 HIT missing Content-Range | **Fixed.** Reconstructs `bytes lo-hi/*`. |
+| 9 | hit_rate counts peer wins as misses | **Fixed.** Added `effective_hit_rate`; alert guidance updated. |
+| 10 | signedCandidates hardcoded | **Fixed.** `SIGNED_CANDIDATES_PER_XORB` env (default 8). |
+| 8 | No graceful shutdown | **Fixed.** `http.Server.Shutdown` on SIGTERM/SIGINT (25s drain); keepalive gets a real stop channel. |
+| 13 | Server god-struct | **Deferred** (intentional). Large mechanical refactor across every handler + test constructor, zero behavior change, low value; the finding itself said "don't do speculatively." Left for a supervised session. |
+
+### New finding discovered during validation (NOT yet fixed)
+
+**Content-Length stripping breaks HEAD metadata for non-LFS small files (Medium, needs impact check).**
+A real `hf_hub_download` of a small git-stored file (e.g. `tokenizer.json`) through the shim fails with
+`LocalEntryNotFoundError: Distant resource does not have a Content-Length`. Reproduces with **no auth
+token**, so it is unrelated to finding #1. Root cause: the hub handler strips `Content-Length` via
+`cleanHeaders` (`proxy.go:69`, hop-by-hop list `util.go:38`); on a HEAD (huggingface_hub's metadata call)
+no body is written, so `net/http` cannot re-derive it and the HEAD response lacks `Content-Length`. LFS/Xet
+files carry `X-Linked-Size` and work — which is why `acceptance.py` (only `model.safetensors`) never caught
+it. **Must verify production impact**: does a full `snapshot_download` (which pulls `config.json`,
+`tokenizer.json`, etc.) fail through the shim? If so this is High. Likely fix: preserve upstream
+`Content-Length` on HEAD proxying. Tracked as a follow-up task.

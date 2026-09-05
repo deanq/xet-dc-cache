@@ -48,6 +48,17 @@ type Server struct {
 	// bound (used by tests that don't set it).
 	peerFetchTimeout time.Duration
 	peerStats        *peerStats
+
+	// Adaptive hedge (Mechanism B): give the peer a head start sized by its
+	// recent throughput, then race the CDN. peerStats holds the per-peer EWMA.
+	hedgeFactor float64 // multiplier on predicted peer time before hedging the CDN
+	hedgeMinMs  int     // floor on the hedge delay
+	hedgeMaxMs  int     // cap on the hedge delay = the guarantee's bounded slack
+
+	// nowFn and hedgeAfter are test seams (clock injection). Both nil in
+	// production => real time.Now / time.After.
+	nowFn      func() time.Time
+	hedgeAfter func(time.Duration) <-chan time.Time
 }
 
 // acquire takes a fetch slot, honoring the caller's context so a client that
@@ -79,4 +90,21 @@ func (s *Server) peerHTTP() httpDoer {
 		return s.peerDoer
 	}
 	return s.doer
+}
+
+// now returns the current time via the injected clock (tests) or the wall clock.
+func (s *Server) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
+}
+
+// after returns a channel that fires after d via the injected timer (tests) or
+// the wall clock.
+func (s *Server) after(d time.Duration) <-chan time.Time {
+	if s.hedgeAfter != nil {
+		return s.hedgeAfter(d)
+	}
+	return time.After(d)
 }

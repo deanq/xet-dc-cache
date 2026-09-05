@@ -28,6 +28,15 @@ func envInt(key string, def int) int {
 	return def
 }
 
+func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
@@ -135,6 +144,10 @@ func main() {
 		sticky:           newStickyPeer(stickyTTL, nil),
 		peerProbeTimeout: probeTimeout,
 		peerFetchTimeout: fetchTimeout,
+		peerStats:        newPeerStats(),
+		hedgeFactor:      envFloat("PEER_HEDGE_FACTOR", 1.5),
+		hedgeMinMs:       envInt("PEER_HEDGE_MIN_MS", 50),
+		hedgeMaxMs:       envInt("PEER_HEDGE_MAX_MS", 1000),
 	}
 	seedLRU(s)
 
@@ -173,7 +186,8 @@ func main() {
 		"port", port, "public_base", s.publicBase, "cache_dir", cacheDir,
 		"max_gib", maxGiB, "min_free_pct", minFreePct, "min_free_bytes", minFree,
 		"max_inflight_fetches", cap(sem), "auth", s.authToken != "",
-		"peers", len(peerList), "peer_max_idle_conns", peerTransport.MaxIdleConnsPerHost)
+		"peers", len(peerList), "peer_max_idle_conns", peerTransport.MaxIdleConnsPerHost,
+		"hedge_factor", envFloat("PEER_HEDGE_FACTOR", 1.5), "hedge_max_ms", envInt("PEER_HEDGE_MAX_MS", 1000))
 	if err := http.ListenAndServe("0.0.0.0:"+port, handler); err != nil {
 		log.Fatal(err)
 	}

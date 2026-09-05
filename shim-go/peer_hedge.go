@@ -1,0 +1,89 @@
+package main
+
+import "context"
+
+// hedgeSource identifies which side of the race produced the served body.
+type hedgeSource int
+
+const (
+	srcPeer hedgeSource = iota
+	srcCDN
+)
+
+// rangeSize returns the byte length of an HTTP Range (hi-lo), 0 if unparseable.
+func rangeSize(byteRange string) int64 {
+	lo, hi, err := parseRange(byteRange)
+	if err != nil {
+		return 0
+	}
+	return hi - lo
+}
+
+type raceResult struct {
+	res xorbResult
+	src hedgeSource
+	ok  bool
+}
+
+// raceOnePeer fires the peer GET to base and gives it an adaptive head start
+// sized by the peer's recent throughput. If the peer finishes first, it wins
+// with zero CDN cost. If the timer fires first, the CDN GET is launched in
+// parallel and the first to finish wins; the loser is cancelled via context.
+// Guarantee: worst-case latency is hedgeDelay + cdnFetch <= PEER_HEDGE_MAX_MS +
+// cdnFetch, because a stalled peer produces no bytes and the CDN wins.
+func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) (xorbResult, hedgeSource, bool) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	size := rangeSize(byteRange)
+	delay := s.peerStats.hedgeDelay(base, size, s.hedgeFactor, s.hedgeMinMs, s.hedgeMaxMs)
+
+	peerCh := make(chan raceResult, 1)
+	go func() {
+		start := s.now()
+		res, ok := s.peerGet(ctx, base, hash, byteRange)
+		if ok {
+			s.peerStats.update(base, int64(len(res.body)), s.now().Sub(start))
+		}
+		peerCh <- raceResult{res: res, src: srcPeer, ok: ok}
+	}()
+
+	// Head start: peer wins outright if it finishes before the timer.
+	select {
+	case o := <-peerCh:
+		return o.res, o.src, o.ok
+	case <-s.after(delay):
+	}
+
+	// Timer fired: hedge the CDN in parallel and race to first completion.
+	s.metrics.Incr("peer_hedge_fired", 1)
+	cdnCh := make(chan raceResult, 1)
+	go func() {
+		res, ok := s.cdnGet(ctx, hash, byteRange)
+		cdnCh <- raceResult{res: res, src: srcCDN, ok: ok}
+	}()
+
+	for {
+		select {
+		case o := <-peerCh:
+			if o.ok {
+				cancel() // stop the CDN loser
+				s.metrics.Incr("peer_hedge_peer_won", 1)
+				s.metrics.Incr("peer_bytes_wasted", size) // CDN range discarded
+				return o.res, srcPeer, true
+			}
+			// Peer failed after the hedge; the CDN is our only hope.
+			c := <-cdnCh
+			return c.res, srcCDN, c.ok
+		case o := <-cdnCh:
+			if o.ok {
+				cancel() // stop the peer loser
+				s.metrics.Incr("peer_hedge_cdn_won", 1)
+				return o.res, srcCDN, true
+			}
+			// CDN failed; fall back to whatever the peer produces.
+			p := <-peerCh
+			return p.res, srcPeer, p.ok
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,14 +28,17 @@ func (s *Server) rememberSigned(hash, url string) {
 
 // fetchAuthorized replays byteRange against each candidate url until one is
 // authorized (wrong-window urls 403). 409 if unknown xorb, 502 if none work.
-func (s *Server) fetchAuthorized(hash, byteRange string) (*http.Response, error) {
+func (s *Server) fetchAuthorized(ctx context.Context, hash, byteRange string) (*http.Response, error) {
 	cands, ok := s.signed.Get(hash)
 	if !ok || len(cands) == 0 {
 		return nil, &httpError{409, "unknown xorb; request reconstruction first"}
 	}
 	last := 0
 	for _, signed := range cands {
-		req, err := http.NewRequest(http.MethodGet, signed, nil)
+		if ctx.Err() != nil {
+			break
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, signed, nil)
 		if err != nil {
 			continue
 		}
@@ -51,6 +55,27 @@ func (s *Server) fetchAuthorized(hash, byteRange string) (*http.Response, error)
 		resp.Body.Close()
 	}
 	return nil, &httpError{502, fmt.Sprintf("no signed url authorizes %s (last %d)", byteRange, last)}
+}
+
+// cdnGet is the CDN side of the hedged race: acquire a fetch slot, pull the
+// authorized range, read the body. Best-effort — any failure (including ctx
+// cancellation when the peer wins the race) returns (zero, false); the plain
+// miss path keeps surfacing typed errors itself.
+func (s *Server) cdnGet(ctx context.Context, hash, byteRange string) (xorbResult, bool) {
+	if err := s.acquire(ctx); err != nil {
+		return xorbResult{}, false
+	}
+	defer s.release()
+	resp, err := s.fetchAuthorized(ctx, hash, byteRange)
+	if err != nil {
+		return xorbResult{}, false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return xorbResult{}, false
+	}
+	return xorbResult{body: body, contentRange: resp.Header.Get("Content-Range")}, true
 }
 
 // isPeerRequest reports whether this request came from a sibling cache. Such
@@ -126,7 +151,7 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 			return nil, aerr
 		}
 		defer s.release()
-		resp, ferr := s.fetchAuthorized(hash, byteRange)
+		resp, ferr := s.fetchAuthorized(r.Context(), hash, byteRange)
 		if ferr != nil {
 			return nil, ferr
 		}

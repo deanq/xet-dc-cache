@@ -100,11 +100,3 @@ func (s *Server) now() time.Time {
 	return time.Now()
 }
 
-// after returns a channel that fires after d via the injected timer (tests) or
-// the wall clock.
-func (s *Server) after(d time.Duration) <-chan time.Time {
-	if s.hedgeAfter != nil {
-		return s.hedgeAfter(d)
-	}
-	return time.After(d)
-}

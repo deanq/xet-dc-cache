@@ -1,6 +1,9 @@
 package main
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // hedgeSource identifies which side of the race produced the served body.
 type hedgeSource int
@@ -30,7 +33,10 @@ type raceResult struct {
 // with zero CDN cost. If the timer fires first, the CDN GET is launched in
 // parallel and the first to finish wins; the loser is cancelled via context.
 // Guarantee: worst-case latency is hedgeDelay + cdnFetch <= PEER_HEDGE_MAX_MS +
-// cdnFetch, because a stalled peer produces no bytes and the CDN wins.
+// cdnFetch, because a stalled peer produces no bytes and the CDN wins. This
+// bound is measured from when the race starts; on the fan-out discovery path
+// one peer HEAD RTT precedes the race (the sticky path avoids it), so real
+// slack on a cold/non-sticky range is discovery RTT + PEER_HEDGE_MAX_MS.
 func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) (xorbResult, hedgeSource, bool) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -49,10 +55,18 @@ func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) 
 	}()
 
 	// Head start: peer wins outright if it finishes before the timer.
+	var timerC <-chan time.Time
+	if s.hedgeAfter != nil {
+		timerC = s.hedgeAfter(delay)
+	} else {
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		timerC = t.C
+	}
 	select {
 	case o := <-peerCh:
 		return o.res, o.src, o.ok
-	case <-s.after(delay):
+	case <-timerC:
 	}
 
 	// Timer fired: hedge the CDN in parallel and race to first completion.

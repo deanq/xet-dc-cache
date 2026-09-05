@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net/http"
 	"testing"
 	"time"
 )
@@ -34,10 +33,6 @@ func TestNewPeerTransportPool(t *testing.T) {
 
 func TestPeerTransportDistinctFromCDNDoer(t *testing.T) {
 	tr := newPeerTransport(peerTransportConfig{MaxIdleConnsPerHost: 64})
-	cdn := &http.Transport{DisableCompression: true}
-	if any(tr) == any(cdn) {
-		t.Fatal("peer transport must be a distinct object from the CDN transport")
-	}
 	if tr.DisableCompression {
 		t.Fatal("peer transport should not inherit the CDN identity/compression contract")
 	}

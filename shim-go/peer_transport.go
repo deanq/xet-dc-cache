@@ -10,7 +10,7 @@ import (
 )
 
 // peerTransportConfig carries the tunables for the dedicated peer transport.
-// SocketBufferBytes is consumed in a later task (0 = OS autotune).
+// SocketBufferBytes sizes SO_RCVBUF/SO_SNDBUF on peer dials; 0 = OS autotune.
 type peerTransportConfig struct {
 	MaxIdleConnsPerHost int
 	SocketBufferBytes   int

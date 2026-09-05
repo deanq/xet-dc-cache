@@ -187,7 +187,7 @@ func main() {
 		"max_gib", maxGiB, "min_free_pct", minFreePct, "min_free_bytes", minFree,
 		"max_inflight_fetches", cap(sem), "auth", s.authToken != "",
 		"peers", len(peerList), "peer_max_idle_conns", peerTransport.MaxIdleConnsPerHost,
-		"hedge_factor", envFloat("PEER_HEDGE_FACTOR", 1.5), "hedge_max_ms", envInt("PEER_HEDGE_MAX_MS", 1000))
+		"hedge_factor", s.hedgeFactor, "hedge_max_ms", s.hedgeMaxMs)
 	if err := http.ListenAndServe("0.0.0.0:"+port, handler); err != nil {
 		log.Fatal(err)
 	}

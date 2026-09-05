@@ -150,6 +150,9 @@ func main() {
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		snap := s.metrics.Snapshot()
 		snap["signed_urls_tracked"] = s.signed.Len()
+		if s.peerStats != nil {
+			snap["peer_throughput_bytes_per_ms"] = s.peerStats.fleetThroughput()
+		}
 		writeJSON(w, http.StatusOK, snap)
 	})
 	mux.HandleFunc("GET /metrics/prometheus", func(w http.ResponseWriter, _ *http.Request) {

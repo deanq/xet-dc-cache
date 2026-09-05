@@ -47,6 +47,7 @@ type Server struct {
 	// peerProbeTimeout, which only budgets the HEAD probe). Zero disables the
 	// bound (used by tests that don't set it).
 	peerFetchTimeout time.Duration
+	peerStats        *peerStats
 }
 
 // acquire takes a fetch slot, honoring the caller's context so a client that

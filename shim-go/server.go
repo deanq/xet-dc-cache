@@ -76,6 +76,23 @@ func (s *Server) acquire(ctx context.Context) error {
 	}
 }
 
+// tryAcquire grabs a fetch slot without blocking, returning false if the pool
+// is saturated. The speculative hedge uses this so a burst of hedged CDN pulls
+// can never consume the slots a genuine cold miss is waiting on: under pressure
+// the hedge simply doesn't fire and the peer carries the range (or, if the peer
+// fails, the plain miss path acquires a slot the normal blocking way).
+func (s *Server) tryAcquire() bool {
+	if s.sem == nil {
+		return true
+	}
+	select {
+	case s.sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) release() {
 	if s.sem != nil {
 		<-s.sem

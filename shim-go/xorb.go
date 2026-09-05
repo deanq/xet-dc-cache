@@ -65,7 +65,10 @@ func (s *Server) fetchAuthorized(ctx context.Context, hash, byteRange string) (*
 // (io.ReadAll returns what it read so far) — the caller books it as the true
 // wasted-transfer cost of a lost hedge, not the requested range size.
 func (s *Server) cdnGet(ctx context.Context, hash, byteRange string) (xorbResult, int64, bool) {
-	if err := s.acquire(ctx); err != nil {
+	// Non-blocking: a speculative hedge must never take a slot a real cold miss
+	// is queued for. If the pool is full, skip the hedge — the peer is still
+	// racing, and a genuine miss falls through to the blocking plain path.
+	if !s.tryAcquire() {
 		return xorbResult{}, 0, false
 	}
 	defer s.release()

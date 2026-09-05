@@ -2,7 +2,10 @@ package main
 
 import (
 	"crypto/tls"
+	"log/slog"
+	"net"
 	"net/http"
+	"syscall"
 	"time"
 )
 
@@ -23,7 +26,7 @@ func newPeerTransport(cfg peerTransportConfig) *http.Transport {
 	if cfg.MaxIdleConnsPerHost <= 0 {
 		cfg.MaxIdleConnsPerHost = 64
 	}
-	return &http.Transport{
+	tr := &http.Transport{
 		// The empty non-nil map is what actually disables the H2 upgrade;
 		// ForceAttemptHTTP2:false alone is not enough for https:// peer URLs.
 		ForceAttemptHTTP2:   false,
@@ -31,5 +34,30 @@ func newPeerTransport(cfg peerTransportConfig) *http.Transport {
 		MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
 		MaxConnsPerHost:     0,
 		IdleConnTimeout:     90 * time.Second,
+	}
+	if ctrl := socketBufferControl(cfg.SocketBufferBytes); ctrl != nil {
+		tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: ctrl}).DialContext
+	}
+	return tr
+}
+
+// socketBufferControl returns a net.Dialer.Control that pins SO_RCVBUF/SO_SNDBUF
+// to bytes on the raw socket before connect. Returns nil (no control) when bytes
+// <= 0, which is the default: modern Linux tcp_rmem/tcp_wmem autotuning beats a
+// static guess, and a wrong static value CAPS throughput. Best-effort: a failed
+// setsockopt is logged at debug and ignored, never failing the dial.
+func socketBufferControl(bytes int) func(network, address string, c syscall.RawConn) error {
+	if bytes <= 0 {
+		return nil
+	}
+	return func(_, _ string, c syscall.RawConn) error {
+		return c.Control(func(fd uintptr) {
+			if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, bytes); err != nil {
+				slog.Debug("peer dial: SO_RCVBUF failed", "bytes", bytes, "err", err)
+			}
+			if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, bytes); err != nil {
+				slog.Debug("peer dial: SO_SNDBUF failed", "bytes", bytes, "err", err)
+			}
+		})
 	}
 }

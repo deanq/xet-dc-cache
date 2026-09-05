@@ -55,3 +55,44 @@ func TestPeerHTTPFallsBackToCDNDoer(t *testing.T) {
 		t.Fatal("peerHTTP must return s.peerDoer when set")
 	}
 }
+
+// fakeRawConn records whether Control was invoked and hands the callback a
+// throwaway fd (0). setsockopt on fd 0 will error; the control fn is
+// best-effort and must ignore that, so the test only asserts it ran.
+type fakeRawConn struct{ controlled bool }
+
+func (f *fakeRawConn) Control(fn func(fd uintptr)) error { f.controlled = true; fn(0); return nil }
+func (f *fakeRawConn) Read(func(uintptr) bool) error     { return nil }
+func (f *fakeRawConn) Write(func(uintptr) bool) error    { return nil }
+
+func TestSocketBufferControlDisabledWhenZero(t *testing.T) {
+	if socketBufferControl(0) != nil {
+		t.Fatal("bytes=0 must install no control fn (OS autotune)")
+	}
+	if socketBufferControl(-1) != nil {
+		t.Fatal("negative bytes must install no control fn")
+	}
+}
+
+func TestSocketBufferControlRunsWhenSet(t *testing.T) {
+	ctrl := socketBufferControl(1 << 20)
+	if ctrl == nil {
+		t.Fatal("bytes>0 must install a control fn")
+	}
+	rc := &fakeRawConn{}
+	if err := ctrl("tcp", "1.2.3.4:8000", rc); err != nil {
+		t.Fatalf("control fn returned error, must be best-effort nil: %v", err)
+	}
+	if !rc.controlled {
+		t.Fatal("control fn must invoke RawConn.Control to setsockopt")
+	}
+}
+
+func TestPeerTransportDialContextGatedOnBuffer(t *testing.T) {
+	if tr := newPeerTransport(peerTransportConfig{MaxIdleConnsPerHost: 64, SocketBufferBytes: 0}); tr.DialContext != nil {
+		t.Fatal("SocketBufferBytes=0 must leave DialContext nil (default dialer, autotune)")
+	}
+	if tr := newPeerTransport(peerTransportConfig{MaxIdleConnsPerHost: 64, SocketBufferBytes: 1 << 20}); tr.DialContext == nil {
+		t.Fatal("SocketBufferBytes>0 must install a custom DialContext")
+	}
+}

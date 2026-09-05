@@ -89,10 +89,14 @@ manifest is deferred to Step 3 so it's shaped by the topology decision.
   `xet_misses_total`, `xet_wan_bytes_total`, `xet_served_bytes_total`,
   `xet_wan_bytes_saved`, `xet_hit_rate`, `xet_cache_bytes`, …). Point a scraper
   here; both `/metrics*` and `/healthz` are exempt from auth. Cross-DC peering
-  (Tier 1.5) adds four series: `xet_peer_hits_total`, `xet_peer_misses_total`,
-  `xet_peer_bytes_total`, and `xet_peer_probe_timeouts_total`; compare
-  `xet_peer_bytes_total` against `xet_wan_bytes_total` to judge whether peering
-  is paying for itself.
+  (Tier 1.5) adds: `xet_peer_hits_total`, `xet_peer_misses_total`,
+  `xet_peer_bytes_total`, `xet_peer_probe_timeouts_total`; plus the adaptive-hedge
+  series `xet_peer_hedge_fired_total`, `xet_peer_hedge_peer_won_total`,
+  `xet_peer_hedge_cdn_won_total`, `xet_peer_bytes_wasted_total`, and the gauge
+  `xet_peer_throughput_bytes_per_ms`. Compare `xet_peer_bytes_total` against
+  `xet_wan_bytes_total` to judge whether peering is paying for itself; watch
+  `xet_peer_bytes_wasted_total` / `xet_peer_hedge_fired_total` to tune
+  `PEER_HEDGE_FACTOR`.
 - Logs are structured JSON on stderr (slog): one `request` line per request with
   `status`, `x_cache`, `bytes`, `dur_ms`. Under systemd they land in the journal
   (`journalctl -u xet-dc-cache -o cat | jq`).

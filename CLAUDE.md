@@ -149,18 +149,31 @@ Env vars (read in `main.go`): `HF_UPSTREAM`, `CAS_UPSTREAM`, `PUBLIC_BASE`,
 `SHIM_AUTH_TOKEN` (empty = open), `PEERS` (comma-separated sibling base URLs;
 empty = peering off), `SELF_URL` (filtered from `PEERS`),
 `PEER_PROBE_TIMEOUT_MS` (default 200), `PEER_STICKY_TTL_SECONDS` (default 60),
-`PEER_FETCH_TIMEOUT_MS` (default 10000; bounds the peer range GET request +
-body read, separate from the HEAD probe budget).
+`PEER_FETCH_TIMEOUT_MS` (default 10000; hard per-GET ceiling on the peer range
+fetch). Peer transport tuning (Mechanism A): `PEER_MAX_IDLE_CONNS_PER_HOST`
+(default 64), `PEER_SOCKET_BUFFER_BYTES` (0 = OS autotune), `PEER_KEEPALIVE_INTERVAL_MS`
+(0 = off). Adaptive hedge (Mechanism B): `PEER_HEDGE_FACTOR` (default 1.5),
+`PEER_HEDGE_MIN_MS` (default 50), `PEER_HEDGE_MAX_MS` (default 1000).
 **`PUBLIC_BASE` is baked into the rewritten URLs handed to clients**, so it
 must be reachable from the worker — set it explicitly for any non-localhost
 deployment.
 
-**Tier 1.5 peering**: on a miss the shim probes its `PEERS` (`HEAD` +
-`X-Xet-Peer: 1`, hit-or-404, one hop — a peer never re-fans-out or falls
-through to the CDN on a probe) and pulls from a warm one before hitting the
-CDN. Peer-served bytes count as `peer_bytes`, not `wan_bytes`; the decision
-metric for whether peering is paying for itself is `xet_peer_bytes_total`
-against `xet_wan_bytes_total`.
+**Tier 1.5 peering** (see `docs/superpowers/specs/2026-09-03-peer-transfer-optimization-design.md`):
+on a miss the shim serves from a sibling over the private backbone instead of the
+CDN. Two mechanisms. **(A)** peer traffic uses a dedicated, HTTP/1.1-forced
+transport (`peer_transport.go`, distinct from the CDN `doer`; fat idle pool,
+optional socket buffers, optional keepalive) so a peer pull starts warm.
+**(B)** an **adaptive hedged race** (`peer_hedge.go` `raceOnePeer`): fire the peer
+`GET`, give it a head start sized by the peer's throughput EWMA (`peerStats`),
+and if it runs long, race a CDN pull in parallel, take the first to finish, and
+cancel the loser. This bounds client latency to `WAN + PEER_HEDGE_MAX_MS` — a
+peer pull can never leave a client slower than a direct WAN pull beyond that
+slack. The sticky path fires a **bare peer GET** (no HEAD — a peer serves
+hit-or-404, so a 404 *is* the miss signal); the fan-out **HEAD** probe stays for
+discovery. Peer-served bytes count as `peer_bytes`, a hedged CDN win as
+`wan_bytes`; the decision metric is `xet_peer_bytes_total` vs `xet_wan_bytes_total`.
+Note: since HF pays CDN egress, hedged CDN bytes are ~free to the operator — the
+hedge dial trades HF-CDN load, not egress dollars.
 
 Endpoints: `GET /healthz`, `GET /metrics` (JSON), `GET /metrics/prometheus`
 (text exposition, hand-rolled in `prometheus.go`), plus the three protocol

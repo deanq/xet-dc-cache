@@ -78,7 +78,8 @@ sequenceDiagram
 
 Step 4 above is where caching happens. Peering is a strict accelerator: every
 peer failure mode falls through to the CDN, so a request can never *fail* that the
-CDN would have served.
+CDN would have served — and it can never be *slower* than a direct WAN pull beyond
+`PEER_HEDGE_MAX_MS`, because a lagging peer is raced against the CDN (below).
 
 ```mermaid
 flowchart TD
@@ -87,20 +88,32 @@ flowchart TD
     B -- "no" --> C{"PEERS configured?"}
     C -- "no" --> CDN["CDN fetch via stashed signed URL"]
     C -- "yes" --> D{"Sticky peer live?"}
-    D -- "yes" --> G["GET range from peer<br/>X-Xet-Peer: 1"]
+    D -- "yes" --> R["Race chosen peer<br/>(bare GET, X-Xet-Peer: 1)"]
     D -- "no" --> E["Fan-out HEAD probe<br/>hit-or-404 · one hop"]
-    E --> F{"Any peer 206<br/>within budget?"}
-    F -- "yes" --> G
+    E --> F{"Any peer has it?"}
+    F -- "yes" --> R
     F -- "no / timeout" --> CDN
-    G --> J{"Peer transfer OK?"}
+    R --> H["Peer head start = EWMA-sized delay"]
+    H --> J{"Peer finishes<br/>before delay?"}
     J -- "yes" --> P1["Cache atomically → serve<br/>counts as peer_bytes"]
-    J -- "no / short read" --> CDN
-    CDN --> W1["Cache atomically → serve<br/>counts as wan_bytes"]
+    J -- "no" --> HEDGE["Hedge CDN in parallel<br/>first to finish wins, cancel loser"]
+    HEDGE --> K{"Who won?"}
+    K -- "peer" --> P1
+    K -- "CDN" --> W1["Cache atomically → serve<br/>counts as wan_bytes"]
+    K -- "peer failed" --> CDN
+    CDN --> W1
 ```
+
+The peer path is a dedicated, HTTP/1.1-forced transport kept separate from the CDN
+client (so N ranges ride N congestion windows and connections stay warm). The
+**adaptive hedge** gives the peer a head start sized by its recent throughput; only
+a lagging peer triggers a parallel CDN pull, so a healthy peer costs zero CDN
+bytes while the tail is always rescued.
 
 The decision metric for whether peering earns its keep is `xet_peer_bytes_total`
 against `xet_wan_bytes_total` — the fraction of cold-miss bytes the mesh caught
-instead of the CDN.
+instead of the CDN. `xet_peer_hedge_fired_total` / `xet_peer_bytes_wasted_total`
+show how often the hedge fires and its cost.
 
 ### Eviction & disk safety
 
@@ -149,6 +162,8 @@ docs/        Design + reference prose (see below).
 - `docs/xet-cache-findings.md` — empirical results: whole-file dedup is the whole
   game; content-address verification is not achievable via the client API.
 - `docs/lfs-support-handoff.md` — proposed follow-up: add git-LFS caching to the Go shim.
+- `docs/superpowers/specs/2026-09-03-peer-transfer-optimization-design.md` — the
+  tuned peer transport + adaptive hedge ("never slower than WAN") design.
 - `docs/superpowers/` — the spec + plan + acceptance notes for the Go rewrite.
 
 ---

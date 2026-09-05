@@ -137,7 +137,7 @@ func main() {
 		lru:              lru,
 		doer:             client,
 		peerDoer:         peerClient,
-		signedCandidates: 8,
+		signedCandidates: envInt("SIGNED_CANDIDATES_PER_XORB", 8),
 		sem:              sem,
 		authToken:        env("SHIM_AUTH_TOKEN", ""),
 		peers:            peers,

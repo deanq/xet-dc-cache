@@ -100,13 +100,17 @@ func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) 
 				cancel() // stop the CDN loser
 				s.metrics.Incr("peer_hedge_peer_won", 1)
 				// Book the CDN bytes actually transferred before cancellation
-				// (the true waste), not the requested range size. Draining
-				// cdnCh here is bounded by cancellation latency — we already
-				// cancel()'d, so the CDN read unwinds promptly; we are NOT
-				// waiting for the CDN download to finish.
-				if c := <-cdnCh; c.bytes > 0 {
-					s.metrics.Incr("peer_bytes_wasted", c.bytes)
-				}
+				// (the true waste), not the requested range size — but do it
+				// ASYNCHRONOUSLY: the peer already has the body, and blocking
+				// this return on the cancelled CDN read unwinding (TCP teardown,
+				// unbounded) would defeat the hedge's entire latency purpose.
+				// cdnCh is buffered(1) and the CDN goroutine always sends, so
+				// this drain completes and cannot leak.
+				go func() {
+					if c := <-cdnCh; c.bytes > 0 {
+						s.metrics.Incr("peer_bytes_wasted", c.bytes)
+					}
+				}()
 				return o.res, srcPeer, true
 			}
 			// Peer failed after the hedge; the CDN is our only hope.

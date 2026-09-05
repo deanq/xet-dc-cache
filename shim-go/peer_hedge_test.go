@@ -205,7 +205,16 @@ func TestRacePeerWinsBooksActualCDNWaste(t *testing.T) {
 	if !ok || src != srcPeer || string(res.body) != "BYTES" {
 		t.Fatalf("peer-after-hedge = (%q,%v,%v), want BYTES,srcPeer,true", res.body, src, ok)
 	}
-	if got := s.metrics.Snapshot()["peer_bytes_wasted"].(int64); got != 5 {
+	// The waste is booked asynchronously (so the peer-win return isn't blocked
+	// on CDN teardown), so poll for it rather than reading immediately.
+	var got int64
+	for i := 0; i < 400; i++ {
+		if got = s.metrics.Snapshot()["peer_bytes_wasted"].(int64); got == 5 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got != 5 {
 		t.Fatalf("peer_bytes_wasted = %d, want 5 (the bytes the CDN streamed before cancel)", got)
 	}
 }

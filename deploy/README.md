@@ -112,10 +112,15 @@ your scraper should be able to reach its port. Do not expose it to the internet.
 
 Two knobs harden it within that boundary:
 
-- `SHIM_AUTH_TOKEN` — optional shared secret. When set, data requests must carry
-  `Authorization: Bearer <token>`; `/healthz` and `/metrics*` stay open. This is
-  defense in depth (a misrouted worker gets 401), **not** a substitute for
-  network isolation.
+- `SHIM_AUTH_TOKEN` — optional shared secret that authenticates the **peer
+  channel**. When set, peer-to-peer requests (`X-Xet-Peer: 1`) must carry
+  `Authorization: Bearer <token>`; an unauthorized node cannot pull from or
+  probe the fleet cache. It deliberately does **not** gate client traffic: under
+  transparent interception a stock HF client only ever sends its own HF token in
+  `Authorization` (which the shim forwards upstream), so it can never present the
+  shim secret — gating client paths on it would 401 every real download. Client
+  traffic is protected by network isolation, **not** this token. `/healthz` and
+  `/metrics*` stay open.
 - `MAX_INFLIGHT_FETCHES` — caps concurrent upstream miss fetches so a burst of
   distinct cold ranges can't exhaust host memory or hammer upstreams.
 

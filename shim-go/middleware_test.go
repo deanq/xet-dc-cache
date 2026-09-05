@@ -18,15 +18,23 @@ func TestWithAuth(t *testing.T) {
 		name       string
 		path       string
 		auth       string
+		peer       bool
 		wantStatus int
 		wantReach  bool
 	}{
-		{"data path, no token -> 401", "/xorb/xorbs/default/h", "", http.StatusUnauthorized, false},
-		{"data path, wrong token -> 401", "/xorb/xorbs/default/h", "Bearer nope", http.StatusUnauthorized, false},
-		{"data path, right token -> pass", "/xorb/xorbs/default/h", "Bearer s3cret", http.StatusOK, true},
-		{"healthz exempt", "/healthz", "", http.StatusOK, true},
-		{"metrics exempt", "/metrics", "", http.StatusOK, true},
-		{"metrics/prometheus exempt", "/metrics/prometheus", "", http.StatusOK, true},
+		// Client data traffic is NOT gated by the bearer: a stock HF client can
+		// only send its HF Authorization token (which the shim forwards
+		// upstream), so it can never present the shim secret. Gating it would
+		// 401 every real download. Client paths rely on network isolation.
+		{"client data path, no token -> pass", "/xorb/xorbs/default/h", "", false, http.StatusOK, true},
+		{"client data path, HF token -> pass", "/xorb/xorbs/default/h", "Bearer hf_abc", false, http.StatusOK, true},
+		// Peer traffic (X-Xet-Peer:1) IS gated — peers set the bearer explicitly.
+		{"peer request, no token -> 401", "/xorb/xorbs/default/h", "", true, http.StatusUnauthorized, false},
+		{"peer request, wrong token -> 401", "/xorb/xorbs/default/h", "Bearer nope", true, http.StatusUnauthorized, false},
+		{"peer request, right token -> pass", "/xorb/xorbs/default/h", "Bearer s3cret", true, http.StatusOK, true},
+		{"healthz exempt", "/healthz", "", false, http.StatusOK, true},
+		{"metrics exempt", "/metrics", "", false, http.StatusOK, true},
+		{"metrics/prometheus exempt", "/metrics/prometheus", "", false, http.StatusOK, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -35,6 +43,9 @@ func TestWithAuth(t *testing.T) {
 			req := httptest.NewRequest("GET", c.path, nil)
 			if c.auth != "" {
 				req.Header.Set("Authorization", c.auth)
+			}
+			if c.peer {
+				req.Header.Set("X-Xet-Peer", "1")
 			}
 			h.ServeHTTP(rec, req)
 			if rec.Code != c.wantStatus {

@@ -53,18 +53,23 @@ func isOperationalPath(p string) bool {
 	return p == "/healthz" || p == "/metrics" || strings.HasPrefix(p, "/metrics/")
 }
 
-// withAuth gates inbound requests with a shared secret when token != "".
-// Clients present it as `Authorization: Bearer <token>`. Empty token = open
-// (the trusted-LAN default; no behavior change). Health/metrics stay open so
-// operational probes don't need the secret. This is defense in depth, not the
-// trust boundary — see deploy/README.md ("Security / trust boundary").
+// withAuth authenticates the PEER channel with a shared secret when token != "".
+// It deliberately does NOT gate client data traffic: under transparent
+// interception a stock HuggingFace client only ever sends its own HF token in
+// `Authorization` (which the shim forwards upstream), so it can never present
+// the shim secret — gating client paths on it would 401 every real download.
+// Client traffic is protected by network isolation (the trusted-LAN posture,
+// see deploy/README.md). Peer requests (X-Xet-Peer:1) DO carry the bearer
+// explicitly (setPeerHeaders), so the secret guards the one channel that can
+// actually satisfy it: an unauthorized node cannot pull from or probe the
+// fleet cache. Empty token = open. Health/metrics stay open for probes.
 func withAuth(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next
 	}
 	want := "Bearer " + token
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isOperationalPath(r.URL.Path) {
+		if !isPeerRequest(r) || isOperationalPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

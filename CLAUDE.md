@@ -179,9 +179,13 @@ Endpoints: `GET /healthz`, `GET /metrics` (JSON), `GET /metrics/prometheus`
 (text exposition, hand-rolled in `prometheus.go`), plus the three protocol
 handlers. Requests pass through `withLogging`→`withAuth` (`middleware.go`):
 slog JSON request logs, and — only when `SHIM_AUTH_TOKEN` is set — a Bearer gate
-that exempts `/healthz` and `/metrics*`. The shim forwards client HF tokens
-upstream over plaintext HTTP: it is a **trusted-LAN component** (trust boundary
-documented in `deploy/README.md`).
+on the **peer channel** (`X-Xet-Peer: 1`) that exempts `/healthz` and
+`/metrics*`. The gate does **not** apply to client traffic: a stock HF client
+only sends its own HF token in `Authorization` (forwarded upstream), so it can
+never present the shim secret — gating client paths would 401 every real
+download. Client traffic relies on network isolation. The shim forwards client
+HF tokens upstream over plaintext HTTP: it is a **trusted-LAN component** (trust
+boundary documented in `deploy/README.md`).
 
 ## Layout
 

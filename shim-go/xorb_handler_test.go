@@ -57,6 +57,11 @@ func TestGetXorbMissThenHit(t *testing.T) {
 	if rec2.Code != 206 || rec2.Header().Get("X-Cache") != "HIT" {
 		t.Fatalf("hit: code=%d xcache=%s", rec2.Code, rec2.Header().Get("X-Cache"))
 	}
+	// A 206 MUST carry Content-Range (RFC 7233); the HIT reconstructs it from the
+	// requested range with "*" for the unknown total.
+	if got := rec2.Header().Get("Content-Range"); got != "bytes 0-4/*" {
+		t.Fatalf("HIT Content-Range = %q, want \"bytes 0-4/*\"", got)
+	}
 	if atomic.LoadInt32(&d.n) != 1 {
 		t.Fatalf("fetched %d times, want 1 (second is a HIT)", d.n)
 	}

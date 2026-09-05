@@ -18,6 +18,19 @@ func elapsedMs(start, end time.Time) float64 {
 	return float64(end.Sub(start).Microseconds()) / 1000.0
 }
 
+// contentRangeForHit reconstructs the Content-Range header for a 206 served
+// from disk. The total resource size isn't stored, so it uses "*" for the
+// complete-length (valid per RFC 7233 §4.2) — enough to make the 206 well-formed
+// without inventing a total. Empty when the range is unparseable or the body is
+// empty, in which case the caller omits the header (the prior behavior).
+func contentRangeForHit(byteRange string, n int64) string {
+	lo, _, err := parseRange(byteRange)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("bytes %d-%d/*", lo, lo+n-1)
+}
+
 func cachePath(dir, hash, byteRange string) string {
 	sum := sha256.Sum256([]byte(hash + ":" + byteRange))
 	return filepath.Join(dir, hex.EncodeToString(sum[:]))

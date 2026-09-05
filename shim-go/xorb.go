@@ -129,7 +129,7 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 		s.metrics.Incr("hits", 1)
 		s.metrics.Incr("served_bytes", int64(len(body)))
 		s.metrics.Observe("hit", elapsedMs(start, s.now()))
-		writeXorbBytes(w, body, "HIT", "")
+		writeXorbBytes(w, body, "HIT", contentRangeForHit(byteRange, int64(len(body))))
 		return
 	}
 

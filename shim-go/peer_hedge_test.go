@@ -83,7 +83,7 @@ func newHedgeServer(d *hedgeDoer, timer chan time.Time) *Server {
 
 func TestRaceFastPeerNoCDN(t *testing.T) {
 	peerRel := make(chan struct{})
-	close(peerRel)                 // peer completes immediately
+	close(peerRel)                // peer completes immediately
 	timer := make(chan time.Time) // never fires
 	d := &hedgeDoer{peerRelease: peerRel, body: "BYTES", peerHas: true}
 	s := newHedgeServer(d, timer)
@@ -142,7 +142,79 @@ func TestRacePeerWinsAfterHedge(t *testing.T) {
 	if snap["peer_hedge_fired"].(int64) != 1 || snap["peer_hedge_peer_won"].(int64) != 1 {
 		t.Fatalf("counters = %+v, want fired=1 peer_won=1", snap)
 	}
-	if snap["peer_bytes_wasted"].(int64) != 5 {
-		t.Fatalf("peer_bytes_wasted = %v, want 5 (the discarded CDN range)", snap["peer_bytes_wasted"])
+	// The CDN body never delivered a byte before it was cancelled, so the TRUE
+	// wasted transfer is 0 — not the 5-byte requested range. Booking the range
+	// size here (the old behavior) systematically overcounted (finding #3).
+	if snap["peer_bytes_wasted"].(int64) != 0 {
+		t.Fatalf("peer_bytes_wasted = %v, want 0 (CDN transferred nothing before cancel)", snap["peer_bytes_wasted"])
+	}
+}
+
+// partialThenBlockBody yields data once, then blocks until the request context
+// is cancelled — modeling a CDN GET that streamed some bytes before losing the
+// race and being cancelled. io.ReadAll therefore returns those bytes AND an
+// error, so cdnGet reports the partial count as the true wasted transfer.
+type partialThenBlockBody struct {
+	ctx  context.Context
+	data []byte
+	sent bool
+}
+
+func (b *partialThenBlockBody) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(p, b.data), nil
+	}
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+func (b *partialThenBlockBody) Close() error { return nil }
+
+// partialCDNDoer answers the peer GET immediately (peer wins) and the CDN GET
+// with a body that streams `body` once then blocks until cancelled.
+type partialCDNDoer struct {
+	peerRelease <-chan struct{}
+	body        string
+}
+
+func (d *partialCDNDoer) Do(req *http.Request) (*http.Response, error) {
+	h := http.Header{}
+	h.Set("Content-Range", "bytes 0-4/999")
+	if req.Header.Get("X-Xet-Peer") == "1" {
+		return &http.Response{StatusCode: 206, Header: h,
+			Body: &hedgeBody{ctx: req.Context(), release: d.peerRelease, data: []byte(d.body)}}, nil
+	}
+	return &http.Response{StatusCode: 206, Header: h,
+		Body: &partialThenBlockBody{ctx: req.Context(), data: []byte(d.body)}}, nil
+}
+
+// A peer win after the hedge must book the CDN bytes ACTUALLY transferred
+// before cancellation, not the requested range size (finding #3).
+func TestRacePeerWinsBooksActualCDNWaste(t *testing.T) {
+	peerRel := make(chan struct{})
+	close(peerRel) // peer completes right after the hedge fires
+	timer := make(chan time.Time)
+	close(timer) // hedge fires immediately
+	d := &partialCDNDoer{peerRelease: peerRel, body: "BYTES"}
+	s := newHedgeServer(&hedgeDoer{}, timer) // placeholder, doer replaced below
+	s.doer = d
+	s.peerDoer = d
+	s.signed.Set("h", []string{"http://cdn/x"})
+
+	res, src, ok := s.raceOnePeer(context.Background(), "https://b:8000", "h", "bytes=0-4")
+	if !ok || src != srcPeer || string(res.body) != "BYTES" {
+		t.Fatalf("peer-after-hedge = (%q,%v,%v), want BYTES,srcPeer,true", res.body, src, ok)
+	}
+	// The waste is booked asynchronously (so the peer-win return isn't blocked
+	// on CDN teardown), so poll for it rather than reading immediately.
+	var got int64
+	for i := 0; i < 400; i++ {
+		if got = s.metrics.Snapshot()["peer_bytes_wasted"].(int64); got == 5 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got != 5 {
+		t.Fatalf("peer_bytes_wasted = %d, want 5 (the bytes the CDN streamed before cancel)", got)
 	}
 }

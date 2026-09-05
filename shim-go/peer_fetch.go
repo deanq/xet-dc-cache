@@ -66,7 +66,11 @@ func (s *Server) recordRaceWin(res xorbResult, src hedgeSource) {
 		s.metrics.Incr("peer_hits", 1)
 		s.metrics.Incr("peer_bytes", int64(len(res.body)))
 	} else {
+		// A hedge CDN win. Book wan_bytes (total WAN) AND the hedge-specific
+		// subset so operators can tell "hedge raced past a slow peer" apart from
+		// the plain "no peer had it" fallthrough (which books wan_bytes only).
 		s.metrics.Incr("wan_bytes", int64(len(res.body)))
+		s.metrics.Incr("peer_hedge_cdn_bytes", int64(len(res.body)))
 	}
 }
 

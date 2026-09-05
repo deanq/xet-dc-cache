@@ -44,6 +44,10 @@ curl -s localhost:8000/metrics | jq
 
 Logs: `journalctl -u xet-dc-cache -f`.
 
+On `SIGTERM`/`SIGINT` (systemd stop, or a K8s DaemonSet rollout) the shim
+drains in-flight requests via `http.Server.Shutdown` (up to 25s) instead of
+severing connections mid-transfer, then stops the peer-keepalive loop.
+
 ### ⚠️ PUBLIC_BASE must be LAN-reachable
 
 `PUBLIC_BASE` is baked verbatim into the URLs the shim hands back to clients
@@ -94,15 +98,28 @@ manifest is deferred to Step 3 so it's shaped by the topology decision.
   series `xet_peer_hedge_fired_total`, `xet_peer_hedge_peer_won_total`,
   `xet_peer_hedge_cdn_won_total`, `xet_peer_bytes_wasted_total`, and the gauge
   `xet_peer_throughput_bytes_per_ms`. Compare `xet_peer_bytes_total` against
-  `xet_wan_bytes_total` to judge whether peering is paying for itself; watch
-  `xet_peer_bytes_wasted_total` / `xet_peer_hedge_fired_total` to tune
-  `PEER_HEDGE_FACTOR`.
+  `xet_wan_bytes_total` to judge whether peering is paying for itself. To tune
+  `PEER_HEDGE_FACTOR`, watch the ratio
+  `xet_peer_hedge_peer_won_total / xet_peer_hedge_fired_total` — the fraction of
+  fired hedges the peer went on to win anyway (i.e. the CDN pull was wasted
+  effort); a high ratio means the head start is too short. `xet_peer_bytes_wasted_total`
+  reports the actual CDN bytes transferred before those losing pulls were
+  cancelled (the real cost of the insurance), not the requested range size.
+  `xet_xorb_latency_ms` is a histogram of served-range latency by `source`
+  (`hit`|`peer`|`cdn`) — the p99 the hedge guarantee is about; graph
+  `histogram_quantile(0.99, ...)` per source. `xet_peer_peer_throughput_bytes_per_ms{peer=…}`
+  exposes each peer's throughput EWMA so one slow peer is visible where the
+  fleet aggregate hides it. `xet_peer_hedge_cdn_bytes_total` is the subset of
+  `xet_wan_bytes_total` served by a hedge CDN win (raced past a slow peer),
+  separable from the plain no-peer fallthrough (the remainder).
 - Logs are structured JSON on stderr (slog): one `request` line per request with
   `status`, `x_cache`, `bytes`, `dur_ms`. Under systemd they land in the journal
   (`journalctl -u xet-dc-cache -o cat | jq`).
 
-Suggested alerts: `xet_hit_rate` dropping, disk pressure on `CACHE_DIR`, and a
-rising upstream error rate (4xx/5xx in the request logs).
+Suggested alerts: `xet_effective_hit_rate` dropping (prefer this over
+`xet_hit_rate` when peering is on — plain `xet_hit_rate` counts a peer-served
+range as a miss and so understates a healthy fleet), disk pressure on
+`CACHE_DIR`, and a rising upstream error rate (4xx/5xx in the request logs).
 
 ## Security / trust boundary
 
@@ -112,10 +129,15 @@ your scraper should be able to reach its port. Do not expose it to the internet.
 
 Two knobs harden it within that boundary:
 
-- `SHIM_AUTH_TOKEN` — optional shared secret. When set, data requests must carry
-  `Authorization: Bearer <token>`; `/healthz` and `/metrics*` stay open. This is
-  defense in depth (a misrouted worker gets 401), **not** a substitute for
-  network isolation.
+- `SHIM_AUTH_TOKEN` — optional shared secret that authenticates the **peer
+  channel**. When set, peer-to-peer requests (`X-Xet-Peer: 1`) must carry
+  `Authorization: Bearer <token>`; an unauthorized node cannot pull from or
+  probe the fleet cache. It deliberately does **not** gate client traffic: under
+  transparent interception a stock HF client only ever sends its own HF token in
+  `Authorization` (which the shim forwards upstream), so it can never present the
+  shim secret — gating client paths on it would 401 every real download. Client
+  traffic is protected by network isolation, **not** this token. `/healthz` and
+  `/metrics*` stay open.
 - `MAX_INFLIGHT_FETCHES` — caps concurrent upstream miss fetches so a burst of
   distinct cold ranges can't exhaust host memory or hammer upstreams.
 

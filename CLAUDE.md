@@ -144,7 +144,10 @@ Env vars (read in `main.go`): `HF_UPSTREAM`, `CAS_UPSTREAM`, `PUBLIC_BASE`,
 `CACHE_DIR`, `XORB_CACHE_MAX_GIB` (0 = no byte budget), `CACHE_MIN_FREE_PCT`
 (default 10; always-on disk-free watermark via `statfs`, 0 = disable),
 `SIGNED_URL_TTL_SECONDS`,
-`SIGNED_URL_MAX_ENTRIES`, `MANIFEST_CACHE_MAX_ENTRIES`, `PORT`,
+`SIGNED_URL_MAX_ENTRIES`, `MANIFEST_CACHE_MAX_ENTRIES`,
+`SIGNED_CANDIDATES_PER_XORB` (default 8; how many signed CDN URLs to retain per
+xorb hash — a xorb spanning >N ranged reconstructions needs a deeper list or a
+window's authorizing URL can be evicted → spurious 502), `PORT`,
 `MAX_INFLIGHT_FETCHES` (0 = unlimited; caps concurrent upstream misses),
 `SHIM_AUTH_TOKEN` (empty = open), `PEERS` (comma-separated sibling base URLs;
 empty = peering off), `SELF_URL` (filtered from `PEERS`),
@@ -166,9 +169,14 @@ optional socket buffers, optional keepalive) so a peer pull starts warm.
 **(B)** an **adaptive hedged race** (`peer_hedge.go` `raceOnePeer`): fire the peer
 `GET`, give it a head start sized by the peer's throughput EWMA (`peerStats`),
 and if it runs long, race a CDN pull in parallel, take the first to finish, and
-cancel the loser. This bounds client latency to `WAN + PEER_HEDGE_MAX_MS` — a
-peer pull can never leave a client slower than a direct WAN pull beyond that
-slack. The sticky path fires a **bare peer GET** (no HEAD — a peer serves
+cancel the loser. This bounds a **single race** to `WAN + PEER_HEDGE_MAX_MS`
+(plus one discovery HEAD RTT on a cold, non-sticky range). The bound is
+**per-race, not per-request**: `raceOnePeer` returns failure only when its peer
+*and* CDN sides both fail, so on cascading CDN failure `fetchFromPeer` can run a
+sticky race, then a fan-out race, and `getXorb` then still runs the plain CDN
+path — up to three sequential CDN attempts. That chain is gated on CDN failure
+(healthy-CDN requests always finish in the first race) but exceeds the single-race
+bound when it triggers. The sticky path fires a **bare peer GET** (no HEAD — a peer serves
 hit-or-404, so a 404 *is* the miss signal); the fan-out **HEAD** probe stays for
 discovery. Peer-served bytes count as `peer_bytes`, a hedged CDN win as
 `wan_bytes`; the decision metric is `xet_peer_bytes_total` vs `xet_wan_bytes_total`.
@@ -179,9 +187,13 @@ Endpoints: `GET /healthz`, `GET /metrics` (JSON), `GET /metrics/prometheus`
 (text exposition, hand-rolled in `prometheus.go`), plus the three protocol
 handlers. Requests pass through `withLogging`→`withAuth` (`middleware.go`):
 slog JSON request logs, and — only when `SHIM_AUTH_TOKEN` is set — a Bearer gate
-that exempts `/healthz` and `/metrics*`. The shim forwards client HF tokens
-upstream over plaintext HTTP: it is a **trusted-LAN component** (trust boundary
-documented in `deploy/README.md`).
+on the **peer channel** (`X-Xet-Peer: 1`) that exempts `/healthz` and
+`/metrics*`. The gate does **not** apply to client traffic: a stock HF client
+only sends its own HF token in `Authorization` (forwarded upstream), so it can
+never present the shim secret — gating client paths would 401 every real
+download. Client traffic relies on network isolation. The shim forwards client
+HF tokens upstream over plaintext HTTP: it is a **trusted-LAN component** (trust
+boundary documented in `deploy/README.md`).
 
 ## Layout
 

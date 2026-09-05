@@ -59,23 +59,30 @@ func (s *Server) fetchAuthorized(ctx context.Context, hash, byteRange string) (*
 
 // cdnGet is the CDN side of the hedged race: acquire a fetch slot, pull the
 // authorized range, read the body. Best-effort — any failure (including ctx
-// cancellation when the peer wins the race) returns (zero, false); the plain
-// miss path keeps surfacing typed errors itself.
-func (s *Server) cdnGet(ctx context.Context, hash, byteRange string) (xorbResult, bool) {
-	if err := s.acquire(ctx); err != nil {
-		return xorbResult{}, false
+// cancellation when the peer wins the race) returns (zero, n, false); the plain
+// miss path keeps surfacing typed errors itself. The returned int64 is the
+// number of body bytes actually read, INCLUDING on the cancelled/error path
+// (io.ReadAll returns what it read so far) — the caller books it as the true
+// wasted-transfer cost of a lost hedge, not the requested range size.
+func (s *Server) cdnGet(ctx context.Context, hash, byteRange string) (xorbResult, int64, bool) {
+	// Non-blocking: a speculative hedge must never take a slot a real cold miss
+	// is queued for. If the pool is full, skip the hedge — the peer is still
+	// racing, and a genuine miss falls through to the blocking plain path.
+	if !s.tryAcquire() {
+		return xorbResult{}, 0, false
 	}
 	defer s.release()
 	resp, err := s.fetchAuthorized(ctx, hash, byteRange)
 	if err != nil {
-		return xorbResult{}, false
+		return xorbResult{}, 0, false
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
+	n := int64(len(body))
 	if err != nil {
-		return xorbResult{}, false
+		return xorbResult{}, n, false
 	}
-	return xorbResult{body: body, contentRange: resp.Header.Get("Content-Range")}, true
+	return xorbResult{body: body, contentRange: resp.Header.Get("Content-Range")}, n, true
 }
 
 // isPeerRequest reports whether this request came from a sibling cache. Such
@@ -116,11 +123,13 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := s.now()
 	if body, err := os.ReadFile(path); err == nil {
 		s.lru.Touch(name)
 		s.metrics.Incr("hits", 1)
 		s.metrics.Incr("served_bytes", int64(len(body)))
-		writeXorbBytes(w, body, "HIT", "")
+		s.metrics.Observe("hit", elapsedMs(start, s.now()))
+		writeXorbBytes(w, body, "HIT", contentRangeForHit(byteRange, int64(len(body))))
 		return
 	}
 
@@ -131,16 +140,18 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := s.sf.Do(name, func() (any, error) {
+		fetchStart := s.now()
 		// Tier 1.5: race a warm peer against a hedged CDN pull before the plain
 		// CDN path. recordRaceWin books peer_bytes (peer won) or wan_bytes (CDN
 		// won); misses is counted once here.
 		if s.peers != nil {
-			if res, _, ok := s.fetchFromPeer(r.Context(), hash, byteRange); ok {
+			if res, src, ok := s.fetchFromPeer(r.Context(), hash, byteRange); ok {
 				if werr := writeCacheFileAtomic(s.cacheDir, name, path, res.body); werr != nil {
 					return nil, &httpError{500, "cache write: " + werr.Error()}
 				}
 				s.lru.Record(name, int64(len(res.body)))
 				s.metrics.Incr("misses", 1)
+				s.metrics.Observe(src.label(), elapsedMs(fetchStart, s.now()))
 				return res, nil
 			}
 		}
@@ -167,6 +178,7 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 		s.lru.Record(name, int64(len(body)))
 		s.metrics.Incr("misses", 1)
 		s.metrics.Incr("wan_bytes", int64(len(body)))
+		s.metrics.Observe("cdn", elapsedMs(fetchStart, s.now()))
 		return xorbResult{body: body, contentRange: resp.Header.Get("Content-Range")}, nil
 	})
 	if err != nil {

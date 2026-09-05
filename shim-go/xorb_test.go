@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -101,9 +102,27 @@ func TestFetchAuthorizedHonorsContext(t *testing.T) {
 func TestCdnGetReturnsBody(t *testing.T) {
 	s := newXorbTestServer(t, &countingDoer{})
 	s.signed.Set("h", []string{"http://cdn/x"})
-	res, ok := s.cdnGet(context.Background(), "h", "bytes=0-4")
-	if !ok || string(res.body) != "BYTES" {
-		t.Fatalf("cdnGet = (%q,%v), want BYTES,true", res.body, ok)
+	res, n, ok := s.cdnGet(context.Background(), "h", "bytes=0-4")
+	if !ok || string(res.body) != "BYTES" || n != 5 {
+		t.Fatalf("cdnGet = (%q,%d,%v), want BYTES,5,true", res.body, n, ok)
+	}
+}
+
+// The speculative hedge must not consume a fetch slot a real miss is waiting
+// on: when the pool is saturated cdnGet returns false without touching the CDN.
+func TestCdnGetSkipsWhenPoolSaturated(t *testing.T) {
+	d := &countingDoer{}
+	s := newXorbTestServer(t, d)
+	s.sem = make(chan struct{}, 1)
+	s.sem <- struct{}{} // saturate the single slot
+	s.signed.Set("h", []string{"http://cdn/x"})
+
+	res, n, ok := s.cdnGet(context.Background(), "h", "bytes=0-4")
+	if ok || n != 0 || res.body != nil {
+		t.Fatalf("cdnGet under saturation = (%q,%d,%v), want nil,0,false", res.body, n, ok)
+	}
+	if atomic.LoadInt32(&d.n) != 0 {
+		t.Fatalf("CDN was called %d times under saturation, want 0", d.n)
 	}
 }
 

@@ -13,6 +13,14 @@ const (
 	srcCDN
 )
 
+// label is the metrics source name for this side of the race.
+func (h hedgeSource) label() string {
+	if h == srcPeer {
+		return "peer"
+	}
+	return "cdn"
+}
+
 // rangeSize returns the byte length of an HTTP Range (hi-lo), 0 if unparseable.
 func rangeSize(byteRange string) int64 {
 	lo, hi, err := parseRange(byteRange)
@@ -23,9 +31,10 @@ func rangeSize(byteRange string) int64 {
 }
 
 type raceResult struct {
-	res xorbResult
-	src hedgeSource
-	ok  bool
+	res   xorbResult
+	src   hedgeSource
+	ok    bool
+	bytes int64 // body bytes read (used to book true CDN waste on a lost hedge)
 }
 
 // raceOnePeer fires the peer GET to base and gives it an adaptive head start
@@ -37,6 +46,13 @@ type raceResult struct {
 // bound is measured from when the race starts; on the fan-out discovery path
 // one peer HEAD RTT precedes the race (the sticky path avoids it), so real
 // slack on a cold/non-sticky range is discovery RTT + PEER_HEDGE_MAX_MS.
+//
+// The bound is PER RACE. raceOnePeer returns ok=false only when BOTH its peer
+// and CDN sides fail, so on cascading CDN failure the caller (fetchFromPeer)
+// can run a sticky race then a fan-out race, and getXorb then still runs the
+// plain CDN path — up to three sequential CDN attempts. That is resilience
+// (retry on CDN failure), not a violation, but the per-request worst case
+// exceeds this per-race bound whenever the CDN is failing.
 func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) (xorbResult, hedgeSource, bool) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -73,8 +89,8 @@ func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) 
 	s.metrics.Incr("peer_hedge_fired", 1)
 	cdnCh := make(chan raceResult, 1)
 	go func() {
-		res, ok := s.cdnGet(ctx, hash, byteRange)
-		cdnCh <- raceResult{res: res, src: srcCDN, ok: ok}
+		res, n, ok := s.cdnGet(ctx, hash, byteRange)
+		cdnCh <- raceResult{res: res, src: srcCDN, ok: ok, bytes: n}
 	}()
 
 	for {
@@ -83,7 +99,18 @@ func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) 
 			if o.ok {
 				cancel() // stop the CDN loser
 				s.metrics.Incr("peer_hedge_peer_won", 1)
-				s.metrics.Incr("peer_bytes_wasted", size) // CDN range discarded
+				// Book the CDN bytes actually transferred before cancellation
+				// (the true waste), not the requested range size — but do it
+				// ASYNCHRONOUSLY: the peer already has the body, and blocking
+				// this return on the cancelled CDN read unwinding (TCP teardown,
+				// unbounded) would defeat the hedge's entire latency purpose.
+				// cdnCh is buffered(1) and the CDN goroutine always sends, so
+				// this drain completes and cannot leak.
+				go func() {
+					if c := <-cdnCh; c.bytes > 0 {
+						s.metrics.Incr("peer_bytes_wasted", c.bytes)
+					}
+				}()
 				return o.res, srcPeer, true
 			}
 			// Peer failed after the hedge; the CDN is our only hope.

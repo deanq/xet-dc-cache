@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -137,7 +141,7 @@ func main() {
 		lru:              lru,
 		doer:             client,
 		peerDoer:         peerClient,
-		signedCandidates: 8,
+		signedCandidates: envInt("SIGNED_CANDIDATES_PER_XORB", 8),
 		sem:              sem,
 		authToken:        env("SHIM_AUTH_TOKEN", ""),
 		peers:            peers,
@@ -151,8 +155,9 @@ func main() {
 	}
 	seedLRU(s)
 
+	stopKeepalive := make(chan struct{})
 	if kaMs := envInt("PEER_KEEPALIVE_INTERVAL_MS", 0); kaMs > 0 && peers != nil {
-		go s.startPeerKeepalive(time.Duration(kaMs)*time.Millisecond, nil)
+		go s.startPeerKeepalive(time.Duration(kaMs)*time.Millisecond, stopKeepalive)
 		slog.Info("peer keepalive enabled", "interval_ms", kaMs)
 	}
 
@@ -188,8 +193,30 @@ func main() {
 		"max_inflight_fetches", cap(sem), "auth", s.authToken != "",
 		"peers", len(peerList), "peer_max_idle_conns", peerTransport.MaxIdleConnsPerHost,
 		"hedge_factor", s.hedgeFactor, "hedge_max_ms", s.hedgeMaxMs)
-	if err := http.ListenAndServe("0.0.0.0:"+port, handler); err != nil {
-		log.Fatal(err)
+	srv := &http.Server{Addr: "0.0.0.0:" + port, Handler: handler}
+
+	// Serve in the background; the main goroutine waits for a termination signal
+	// so a rollout (systemd stop, K8s DaemonSet SIGTERM) can drain in-flight
+	// requests instead of severing connections mid-transfer.
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case s := <-sig:
+		slog.Info("shutting down", "signal", s.String())
+		close(stopKeepalive)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			slog.Warn("graceful shutdown timed out; forcing close", "err", err)
+			_ = srv.Close()
+		}
 	}
 }
 

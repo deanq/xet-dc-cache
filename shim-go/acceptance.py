@@ -80,6 +80,10 @@ def start_shim(cache_dir: Path) -> subprocess.Popen:
             "PUBLIC_BASE": BASE,
             "PORT": PORT,
             "XORB_CACHE_MAX_GIB": "0",
+            # Regression guard for the auth fix: with a shim secret set, a stock
+            # client (which never sends the secret) must still download. The gate
+            # applies only to peer traffic; client data paths stay open.
+            "SHIM_AUTH_TOKEN": "acceptance-secret",
         }
     )
     proc = subprocess.Popen(

@@ -96,7 +96,7 @@ func (s *Server) headProbe(ctx context.Context, base, hash, byteRange string) bo
 		return false
 	}
 	s.setPeerHeaders(req, byteRange)
-	resp, err := s.doer.Do(req)
+	resp, err := s.peerHTTP().Do(req)
 	if err != nil {
 		return false
 	}
@@ -117,7 +117,7 @@ func (s *Server) peerGet(ctx context.Context, base, hash, byteRange string) (xor
 		return xorbResult{}, false
 	}
 	s.setPeerHeaders(req, byteRange)
-	resp, err := s.doer.Do(req)
+	resp, err := s.peerHTTP().Do(req)
 	if err != nil {
 		return xorbResult{}, false
 	}

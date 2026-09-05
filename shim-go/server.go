@@ -14,15 +14,19 @@ type httpDoer interface {
 
 // Server plays all three roles (hub proxy / CAS relay / xorb store).
 type Server struct {
-	hfUpstream       string
-	casUpstream      string
-	publicBase       string
-	cacheDir         string
-	signed           *TTLMap
-	manifests        *ManifestCache
-	metrics          *Metrics
-	lru              *lruCache
-	doer             httpDoer
+	hfUpstream  string
+	casUpstream string
+	publicBase  string
+	cacheDir    string
+	signed      *TTLMap
+	manifests   *ManifestCache
+	metrics     *Metrics
+	lru         *lruCache
+	doer        httpDoer
+	// peerDoer carries peer traffic on a dedicated, HTTP/1.1-forced transport
+	// (see newPeerTransport). Kept distinct from doer so peer tuning never
+	// perturbs the CDN redirect/identity contract. nil => fall back to doer.
+	peerDoer         httpDoer
 	sf               singleflight.Group
 	signedCandidates int
 
@@ -64,4 +68,14 @@ func (s *Server) release() {
 	if s.sem != nil {
 		<-s.sem
 	}
+}
+
+// peerHTTP returns the doer used for peer traffic: the dedicated tuned peer
+// transport when configured, else the CDN doer (keeps tests that only set doer
+// working, and keeps peering functional if the peer transport is unset).
+func (s *Server) peerHTTP() httpDoer {
+	if s.peerDoer != nil {
+		return s.peerDoer
+	}
+	return s.doer
 }

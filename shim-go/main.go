@@ -103,6 +103,18 @@ func main() {
 		Transport: &http.Transport{DisableCompression: true},
 	}
 
+	peerTransport := newPeerTransport(peerTransportConfig{
+		MaxIdleConnsPerHost: envInt("PEER_MAX_IDLE_CONNS_PER_HOST", 64),
+		SocketBufferBytes:   envInt("PEER_SOCKET_BUFFER_BYTES", 0),
+	})
+	peerClient := &http.Client{
+		Timeout: 60 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: peerTransport,
+	}
+
 	s := &Server{
 		hfUpstream:  trimSlash(env("HF_UPSTREAM", "https://huggingface.co")),
 		casUpstream: trimSlash(env("CAS_UPSTREAM", "https://cas-server.xethub.hf.co")),
@@ -115,6 +127,7 @@ func main() {
 		metrics:          metrics,
 		lru:              lru,
 		doer:             client,
+		peerDoer:         peerClient,
 		signedCandidates: 8,
 		sem:              sem,
 		authToken:        env("SHIM_AUTH_TOKEN", ""),
@@ -152,7 +165,7 @@ func main() {
 		"port", port, "public_base", s.publicBase, "cache_dir", cacheDir,
 		"max_gib", maxGiB, "min_free_pct", minFreePct, "min_free_bytes", minFree,
 		"max_inflight_fetches", cap(sem), "auth", s.authToken != "",
-		"peers", len(peerList))
+		"peers", len(peerList), "peer_max_idle_conns", peerTransport.MaxIdleConnsPerHost)
 	if err := http.ListenAndServe("0.0.0.0:"+port, handler); err != nil {
 		log.Fatal(err)
 	}

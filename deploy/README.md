@@ -44,6 +44,10 @@ curl -s localhost:8000/metrics | jq
 
 Logs: `journalctl -u xet-dc-cache -f`.
 
+On `SIGTERM`/`SIGINT` (systemd stop, or a K8s DaemonSet rollout) the shim
+drains in-flight requests via `http.Server.Shutdown` (up to 25s) instead of
+severing connections mid-transfer, then stops the peer-keepalive loop.
+
 ### ⚠️ PUBLIC_BASE must be LAN-reachable
 
 `PUBLIC_BASE` is baked verbatim into the URLs the shim hands back to clients

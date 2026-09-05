@@ -138,6 +138,11 @@ func main() {
 	}
 	seedLRU(s)
 
+	if kaMs := envInt("PEER_KEEPALIVE_INTERVAL_MS", 0); kaMs > 0 && peers != nil {
+		go s.startPeerKeepalive(time.Duration(kaMs)*time.Millisecond, nil)
+		slog.Info("peer keepalive enabled", "interval_ms", kaMs)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

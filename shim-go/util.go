@@ -9,7 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// elapsedMs is the wall time from start to end in milliseconds, with sub-ms
+// resolution (microsecond-derived) so fast disk HITs land below the 1ms bucket.
+func elapsedMs(start, end time.Time) float64 {
+	return float64(end.Sub(start).Microseconds()) / 1000.0
+}
 
 func cachePath(dir, hash, byteRange string) string {
 	sum := sha256.Sum256([]byte(hash + ":" + byteRange))

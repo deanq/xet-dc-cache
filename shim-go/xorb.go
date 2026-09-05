@@ -123,10 +123,12 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := s.now()
 	if body, err := os.ReadFile(path); err == nil {
 		s.lru.Touch(name)
 		s.metrics.Incr("hits", 1)
 		s.metrics.Incr("served_bytes", int64(len(body)))
+		s.metrics.Observe("hit", elapsedMs(start, s.now()))
 		writeXorbBytes(w, body, "HIT", "")
 		return
 	}
@@ -138,16 +140,18 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := s.sf.Do(name, func() (any, error) {
+		fetchStart := s.now()
 		// Tier 1.5: race a warm peer against a hedged CDN pull before the plain
 		// CDN path. recordRaceWin books peer_bytes (peer won) or wan_bytes (CDN
 		// won); misses is counted once here.
 		if s.peers != nil {
-			if res, _, ok := s.fetchFromPeer(r.Context(), hash, byteRange); ok {
+			if res, src, ok := s.fetchFromPeer(r.Context(), hash, byteRange); ok {
 				if werr := writeCacheFileAtomic(s.cacheDir, name, path, res.body); werr != nil {
 					return nil, &httpError{500, "cache write: " + werr.Error()}
 				}
 				s.lru.Record(name, int64(len(res.body)))
 				s.metrics.Incr("misses", 1)
+				s.metrics.Observe(src.label(), elapsedMs(fetchStart, s.now()))
 				return res, nil
 			}
 		}
@@ -174,6 +178,7 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 		s.lru.Record(name, int64(len(body)))
 		s.metrics.Incr("misses", 1)
 		s.metrics.Incr("wan_bytes", int64(len(body)))
+		s.metrics.Observe("cdn", elapsedMs(fetchStart, s.now()))
 		return xorbResult{body: body, contentRange: resp.Header.Get("Content-Range")}, nil
 	})
 	if err != nil {

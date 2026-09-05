@@ -13,6 +13,14 @@ const (
 	srcCDN
 )
 
+// label is the metrics source name for this side of the race.
+func (h hedgeSource) label() string {
+	if h == srcPeer {
+		return "peer"
+	}
+	return "cdn"
+}
+
 // rangeSize returns the byte length of an HTTP Range (hi-lo), 0 if unparseable.
 func rangeSize(byteRange string) int64 {
 	lo, hi, err := parseRange(byteRange)

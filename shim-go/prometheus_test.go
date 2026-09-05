@@ -63,7 +63,9 @@ func TestPrometheusHedgeSeries(t *testing.T) {
 	s.metrics.Incr("peer_hedge_peer_won", 1)
 	s.metrics.Incr("peer_hedge_cdn_won", 3)
 	s.metrics.Incr("peer_bytes_wasted", 2048)
+	s.metrics.Incr("peer_hedge_cdn_bytes", 4096)
 	s.peerStats.update("https://a:8000", 1000, 1*time.Millisecond) // 1000 bytes/ms
+	s.metrics.Observe("cdn", 40)
 
 	out := s.prometheusText()
 	for _, want := range []string{
@@ -71,7 +73,13 @@ func TestPrometheusHedgeSeries(t *testing.T) {
 		"xet_peer_hedge_peer_won_total 1\n",
 		"xet_peer_hedge_cdn_won_total 3\n",
 		"xet_peer_bytes_wasted_total 2048\n",
+		"xet_peer_hedge_cdn_bytes_total 4096\n",
 		"# TYPE xet_peer_throughput_bytes_per_ms gauge\nxet_peer_throughput_bytes_per_ms 1000\n",
+		"xet_peer_peer_throughput_bytes_per_ms{peer=\"https://a:8000\"} 1000\n",
+		"# TYPE xet_xorb_latency_ms histogram\n",
+		"xet_xorb_latency_ms_bucket{source=\"cdn\",le=\"50\"} 1\n",
+		"xet_xorb_latency_ms_bucket{source=\"cdn\",le=\"+Inf\"} 1\n",
+		"xet_xorb_latency_ms_count{source=\"cdn\"} 1\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in exposition:\n%s", want, out)

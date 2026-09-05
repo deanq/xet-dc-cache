@@ -101,6 +101,13 @@ manifest is deferred to Step 3 so it's shaped by the topology decision.
   effort); a high ratio means the head start is too short. `xet_peer_bytes_wasted_total`
   reports the actual CDN bytes transferred before those losing pulls were
   cancelled (the real cost of the insurance), not the requested range size.
+  `xet_xorb_latency_ms` is a histogram of served-range latency by `source`
+  (`hit`|`peer`|`cdn`) — the p99 the hedge guarantee is about; graph
+  `histogram_quantile(0.99, ...)` per source. `xet_peer_peer_throughput_bytes_per_ms{peer=…}`
+  exposes each peer's throughput EWMA so one slow peer is visible where the
+  fleet aggregate hides it. `xet_peer_hedge_cdn_bytes_total` is the subset of
+  `xet_wan_bytes_total` served by a hedge CDN win (raced past a slow peer),
+  separable from the plain no-peer fallthrough (the remainder).
 - Logs are structured JSON on stderr (slog): one `request` line per request with
   `status`, `x_cache`, `bytes`, `dur_ms`. Under systemd they land in the journal
   (`journalctl -u xet-dc-cache -o cat | jq`).

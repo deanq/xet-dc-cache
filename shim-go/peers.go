@@ -130,8 +130,7 @@ func (p *peerStats) update(base string, bytes int64, elapsed time.Duration) {
 }
 
 // fleetThroughput is the mean per-peer EWMA (bytes/ms), 0 when empty. Exposed as
-// a fleet-aggregate gauge for tuning (per-peer labels are out of scope for the
-// hand-rolled Prometheus exposition).
+// a fleet-aggregate gauge for tuning.
 func (p *peerStats) fleetThroughput() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -143,4 +142,17 @@ func (p *peerStats) fleetThroughput() float64 {
 		sum += v
 	}
 	return sum / float64(len(p.ewma))
+}
+
+// perPeer returns a copy of the per-peer throughput EWMA (bytes/ms), rendered as
+// a labeled gauge so an operator can spot the one slow peer a fleet aggregate
+// would hide.
+func (p *peerStats) perPeer() map[string]float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]float64, len(p.ewma))
+	for k, v := range p.ewma {
+		out[k] = v
+	}
+	return out
 }

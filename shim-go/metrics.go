@@ -39,6 +39,7 @@ func (m *Metrics) Snapshot() map[string]any {
 	for _, k := range []string{
 		"hits", "misses", "wan_bytes", "served_bytes",
 		"peer_hits", "peer_misses", "peer_bytes", "peer_probe_timeouts",
+		"peer_hedge_fired", "peer_hedge_peer_won", "peer_hedge_cdn_won", "peer_bytes_wasted",
 	} {
 		if _, ok := out[k]; !ok {
 			out[k] = int64(0)

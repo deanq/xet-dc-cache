@@ -7,53 +7,67 @@ import (
 	"sync"
 )
 
-// fetchFromPeer tries to serve (hash, byteRange) from a warm sibling cache.
-// Returns (result, true) only on a verified 206 whose body length matches the
-// requested range; otherwise (zero, false) and the caller falls back to the
-// CDN. Best-effort: any failure is a false return, never an error to the client.
-func (s *Server) fetchFromPeer(ctx context.Context, hash, byteRange string) (xorbResult, bool) {
+// fetchFromPeer tries to serve (hash, byteRange) from the fleet, racing the
+// chosen peer against a hedged CDN pull (see raceOnePeer). Returns ok=false
+// only when no peer had the range, in which case getXorb falls through to the
+// plain CDN path. When a race runs, ok=true and hedgeSource says who won.
+func (s *Server) fetchFromPeer(ctx context.Context, hash, byteRange string) (xorbResult, hedgeSource, bool) {
 	if s.peers == nil {
-		return xorbResult{}, false
+		return xorbResult{}, srcPeer, false
 	}
 	peers := s.peers.Peers()
 	if len(peers) == 0 {
-		return xorbResult{}, false
+		return xorbResult{}, srcPeer, false
 	}
 
-	// 1. Sticky peer: probe just it under the budget; on hit, fetch it. Any
-	// miss here (failed probe or failed GET) clears the sticky pointer so a
-	// single bad/stalled peer can't tax an entire burst pull.
+	// 1. Sticky peer: bare GET race, no HEAD (a bare peer GET that 404s IS the
+	// miss signal — getXorb serves peers hit-or-404). A win keeps sticky (peer)
+	// or drops it (CDN raced past a slow sticky peer); any failure clears it and
+	// falls through to fan-out discovery.
 	if url, live := s.sticky.get(); live {
-		if s.probeOK(ctx, url, hash, byteRange) {
-			if res, ok := s.peerGet(ctx, url, hash, byteRange); ok {
-				s.sticky.set(url)
-				s.metrics.Incr("peer_hits", 1)
-				s.metrics.Incr("peer_bytes", int64(len(res.body)))
-				return res, true
-			}
+		if res, src, ok := s.raceOnePeer(ctx, url, hash, byteRange); ok {
+			s.updateSticky(url, src)
+			s.recordRaceWin(res, src)
+			return res, src, true
 		}
 		s.sticky.clear()
 	}
 
-	// 2. Fan-out probe; first responder wins.
+	// 2. Fan-out HEAD probe for discovery (which of N peers has the range), then
+	// race the winner. HEAD stays here: firing N speculative GETs would multiply
+	// peer load.
 	if winner, ok := s.fanoutProbe(ctx, peers, hash, byteRange); ok {
-		if res, ok := s.peerGet(ctx, winner, hash, byteRange); ok {
-			s.sticky.set(winner)
-			s.metrics.Incr("peer_hits", 1)
-			s.metrics.Incr("peer_bytes", int64(len(res.body)))
-			return res, true
+		if res, src, ok := s.raceOnePeer(ctx, winner, hash, byteRange); ok {
+			s.updateSticky(winner, src)
+			s.recordRaceWin(res, src)
+			return res, src, true
 		}
 	}
 
 	s.metrics.Incr("peer_misses", 1)
-	return xorbResult{}, false
+	return xorbResult{}, srcPeer, false
 }
 
-// probeOK issues one budgeted HEAD to a single peer; true iff it 200s in time.
-func (s *Server) probeOK(ctx context.Context, base, hash, byteRange string) bool {
-	pctx, cancel := context.WithTimeout(ctx, s.peerProbeTimeout)
-	defer cancel()
-	return s.headProbe(pctx, base, hash, byteRange)
+// updateSticky pins the peer on a peer win, or drops it when the CDN raced past
+// a slow peer (so a burst doesn't keep betting on the laggard).
+func (s *Server) updateSticky(url string, src hedgeSource) {
+	if src == srcPeer {
+		s.sticky.set(url)
+	} else {
+		s.sticky.clear()
+	}
+}
+
+// recordRaceWin books the winning transfer: a peer win displaces WAN/CDN bytes
+// (peer_hits/peer_bytes); a CDN win is a real WAN pull (wan_bytes). misses is
+// counted once by getXorb, outside this function.
+func (s *Server) recordRaceWin(res xorbResult, src hedgeSource) {
+	if src == srcPeer {
+		s.metrics.Incr("peer_hits", 1)
+		s.metrics.Incr("peer_bytes", int64(len(res.body)))
+	} else {
+		s.metrics.Incr("wan_bytes", int64(len(res.body)))
+	}
 }
 
 // fanoutProbe HEAD-probes all peers in parallel under one shared budget and
@@ -96,7 +110,7 @@ func (s *Server) headProbe(ctx context.Context, base, hash, byteRange string) bo
 		return false
 	}
 	s.setPeerHeaders(req, byteRange)
-	resp, err := s.doer.Do(req)
+	resp, err := s.peerHTTP().Do(req)
 	if err != nil {
 		return false
 	}
@@ -117,7 +131,7 @@ func (s *Server) peerGet(ctx context.Context, base, hash, byteRange string) (xor
 		return xorbResult{}, false
 	}
 	s.setPeerHeaders(req, byteRange)
-	resp, err := s.doer.Do(req)
+	resp, err := s.peerHTTP().Do(req)
 	if err != nil {
 		return xorbResult{}, false
 	}

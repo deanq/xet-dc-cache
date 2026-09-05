@@ -28,6 +28,15 @@ func envInt(key string, def int) int {
 	return def
 }
 
+func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
@@ -103,6 +112,18 @@ func main() {
 		Transport: &http.Transport{DisableCompression: true},
 	}
 
+	peerTransport := newPeerTransport(peerTransportConfig{
+		MaxIdleConnsPerHost: envInt("PEER_MAX_IDLE_CONNS_PER_HOST", 64),
+		SocketBufferBytes:   envInt("PEER_SOCKET_BUFFER_BYTES", 0),
+	})
+	peerClient := &http.Client{
+		Timeout: 60 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: peerTransport,
+	}
+
 	s := &Server{
 		hfUpstream:  trimSlash(env("HF_UPSTREAM", "https://huggingface.co")),
 		casUpstream: trimSlash(env("CAS_UPSTREAM", "https://cas-server.xethub.hf.co")),
@@ -115,6 +136,7 @@ func main() {
 		metrics:          metrics,
 		lru:              lru,
 		doer:             client,
+		peerDoer:         peerClient,
 		signedCandidates: 8,
 		sem:              sem,
 		authToken:        env("SHIM_AUTH_TOKEN", ""),
@@ -122,8 +144,17 @@ func main() {
 		sticky:           newStickyPeer(stickyTTL, nil),
 		peerProbeTimeout: probeTimeout,
 		peerFetchTimeout: fetchTimeout,
+		peerStats:        newPeerStats(),
+		hedgeFactor:      envFloat("PEER_HEDGE_FACTOR", 1.5),
+		hedgeMinMs:       envInt("PEER_HEDGE_MIN_MS", 50),
+		hedgeMaxMs:       envInt("PEER_HEDGE_MAX_MS", 1000),
 	}
 	seedLRU(s)
+
+	if kaMs := envInt("PEER_KEEPALIVE_INTERVAL_MS", 0); kaMs > 0 && peers != nil {
+		go s.startPeerKeepalive(time.Duration(kaMs)*time.Millisecond, nil)
+		slog.Info("peer keepalive enabled", "interval_ms", kaMs)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -132,6 +163,9 @@ func main() {
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		snap := s.metrics.Snapshot()
 		snap["signed_urls_tracked"] = s.signed.Len()
+		if s.peerStats != nil {
+			snap["peer_throughput_bytes_per_ms"] = s.peerStats.fleetThroughput()
+		}
 		writeJSON(w, http.StatusOK, snap)
 	})
 	mux.HandleFunc("GET /metrics/prometheus", func(w http.ResponseWriter, _ *http.Request) {
@@ -152,7 +186,8 @@ func main() {
 		"port", port, "public_base", s.publicBase, "cache_dir", cacheDir,
 		"max_gib", maxGiB, "min_free_pct", minFreePct, "min_free_bytes", minFree,
 		"max_inflight_fetches", cap(sem), "auth", s.authToken != "",
-		"peers", len(peerList))
+		"peers", len(peerList), "peer_max_idle_conns", peerTransport.MaxIdleConnsPerHost,
+		"hedge_factor", s.hedgeFactor, "hedge_max_ms", s.hedgeMaxMs)
 	if err := http.ListenAndServe("0.0.0.0:"+port, handler); err != nil {
 		log.Fatal(err)
 	}

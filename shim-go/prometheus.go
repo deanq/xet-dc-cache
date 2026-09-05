@@ -29,6 +29,14 @@ func (s *Server) prometheusText() string {
 		"Bytes pulled from peers (WAN/CDN transfer displaced).", snap["peer_bytes"])
 	promMetric(&b, "xet_peer_probe_timeouts_total", "counter",
 		"Peer discovery probes that exceeded PEER_PROBE_TIMEOUT.", snap["peer_probe_timeouts"])
+	promMetric(&b, "xet_peer_hedge_fired_total", "counter",
+		"Races where the CDN was hedged in (the adaptive timer fired).", snap["peer_hedge_fired"])
+	promMetric(&b, "xet_peer_hedge_peer_won_total", "counter",
+		"Hedged races the peer won (CDN GET cancelled).", snap["peer_hedge_peer_won"])
+	promMetric(&b, "xet_peer_hedge_cdn_won_total", "counter",
+		"Hedged races the CDN won (peer GET cancelled).", snap["peer_hedge_cdn_won"])
+	promMetric(&b, "xet_peer_bytes_wasted_total", "counter",
+		"CDN bytes discarded because the peer won after the CDN GET fired (cost of the latency insurance).", snap["peer_bytes_wasted"])
 	promMetric(&b, "xet_wan_bytes_saved", "gauge",
 		"served_bytes - wan_bytes: WAN transfer the cache eliminated.", snap["wan_bytes_saved"])
 	promMetric(&b, "xet_hit_rate", "gauge",
@@ -37,6 +45,12 @@ func (s *Server) prometheusText() string {
 		"Distinct xorb hashes with a live signed CDN url.", int64(s.signed.Len()))
 	promMetric(&b, "xet_cache_bytes", "gauge",
 		"Bytes currently accounted in the Tier 1 LRU.", s.lru.TotalBytes())
+	var throughput float64
+	if s.peerStats != nil {
+		throughput = s.peerStats.fleetThroughput()
+	}
+	promMetric(&b, "xet_peer_throughput_bytes_per_ms", "gauge",
+		"Fleet-aggregate peer throughput EWMA (bytes/ms), used to size the hedge delay.", throughput)
 	return b.String()
 }
 

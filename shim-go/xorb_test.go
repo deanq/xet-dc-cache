@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -59,7 +60,7 @@ func TestFetchAuthorizedTriesCandidates(t *testing.T) {
 	f := &fakeDoer{good: "right"}
 	s := newTestServer(f)
 	s.signed.Set("h", []string{"wrong1", "wrong2", "right", "wrong3"})
-	resp, err := s.fetchAuthorized("h", "bytes=0-4")
+	resp, err := s.fetchAuthorized(context.Background(), "h", "bytes=0-4")
 	if err != nil || resp.StatusCode != 206 {
 		t.Fatalf("got (%v, %v)", resp, err)
 	}
@@ -71,7 +72,7 @@ func TestFetchAuthorizedTriesCandidates(t *testing.T) {
 func TestFetchAuthorized502WhenNone(t *testing.T) {
 	s := newTestServer(&fakeDoer{good: "nope"})
 	s.signed.Set("h", []string{"a", "b"})
-	_, err := s.fetchAuthorized("h", "bytes=0-4")
+	_, err := s.fetchAuthorized(context.Background(), "h", "bytes=0-4")
 	he, ok := err.(*httpError)
 	if !ok || he.code != 502 {
 		t.Fatalf("err = %v, want 502 httpError", err)
@@ -80,10 +81,29 @@ func TestFetchAuthorized502WhenNone(t *testing.T) {
 
 func TestFetchAuthorized409Unknown(t *testing.T) {
 	s := newTestServer(&fakeDoer{})
-	_, err := s.fetchAuthorized("never", "bytes=0-4")
+	_, err := s.fetchAuthorized(context.Background(), "never", "bytes=0-4")
 	he, ok := err.(*httpError)
 	if !ok || he.code != 409 {
 		t.Fatalf("err = %v, want 409 httpError", err)
+	}
+}
+
+func TestFetchAuthorizedHonorsContext(t *testing.T) {
+	s := newXorbTestServer(t, &countingDoer{})
+	s.signed.Set("h", []string{"http://cdn/x"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+	if _, err := s.fetchAuthorized(ctx, "h", "bytes=0-4"); err == nil {
+		t.Fatal("fetchAuthorized must fail fast when ctx is already cancelled")
+	}
+}
+
+func TestCdnGetReturnsBody(t *testing.T) {
+	s := newXorbTestServer(t, &countingDoer{})
+	s.signed.Set("h", []string{"http://cdn/x"})
+	res, ok := s.cdnGet(context.Background(), "h", "bytes=0-4")
+	if !ok || string(res.body) != "BYTES" {
+		t.Fatalf("cdnGet = (%q,%v), want BYTES,true", res.body, ok)
 	}
 }
 

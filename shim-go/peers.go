@@ -74,3 +74,73 @@ func (s *stickyPeer) clear() {
 	defer s.mu.Unlock()
 	s.url = ""
 }
+
+// ewmaAlpha weights the newest throughput sample in the per-peer EWMA. Small so
+// a single outlier fetch can't whipsaw the hedge decision. Not user-facing.
+const ewmaAlpha = 0.3
+
+// peerStats holds a per-peer throughput EWMA (bytes/ms), updated on every
+// completed peer GET and read to predict the adaptive hedge delay. Throughput
+// (size-normalized), not raw latency, so a 64 MB range and a 1 MB range on the
+// same link produce comparable samples. Thread-safe; lives beside the sticky
+// pointer because both describe "how good is this peer right now".
+type peerStats struct {
+	mu   sync.Mutex
+	ewma map[string]float64 // peer base URL -> throughput bytes/ms
+}
+
+func newPeerStats() *peerStats { return &peerStats{ewma: map[string]float64{}} }
+
+// hedgeDelay predicts how long to give the peer before hedging in the CDN.
+// With no sample for base it returns maxMs (bootstrap: an unknown peer hedges
+// conservatively). Otherwise clamp(size/ewma * factor, minMs, maxMs).
+func (p *peerStats) hedgeDelay(base string, size int64, factor float64, minMs, maxMs int) time.Duration {
+	p.mu.Lock()
+	tp, ok := p.ewma[base]
+	p.mu.Unlock()
+	if !ok || tp <= 0 {
+		return time.Duration(maxMs) * time.Millisecond
+	}
+	ms := (float64(size) / tp) * factor
+	if lo := float64(minMs); ms < lo {
+		ms = lo
+	}
+	if hi := float64(maxMs); ms > hi {
+		ms = hi
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// update folds a completed transfer into base's throughput EWMA. Sub-ms
+// transfers are floored to 1ms so a fast tiny range can't imply infinite
+// throughput.
+func (p *peerStats) update(base string, bytes int64, elapsed time.Duration) {
+	ms := float64(elapsed.Milliseconds())
+	if ms <= 0 {
+		ms = 1
+	}
+	sample := float64(bytes) / ms
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cur, ok := p.ewma[base]; ok {
+		p.ewma[base] = ewmaAlpha*sample + (1-ewmaAlpha)*cur
+	} else {
+		p.ewma[base] = sample
+	}
+}
+
+// fleetThroughput is the mean per-peer EWMA (bytes/ms), 0 when empty. Exposed as
+// a fleet-aggregate gauge for tuning (per-peer labels are out of scope for the
+// hand-rolled Prometheus exposition).
+func (p *peerStats) fleetThroughput() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.ewma) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, v := range p.ewma {
+		sum += v
+	}
+	return sum / float64(len(p.ewma))
+}

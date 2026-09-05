@@ -22,3 +22,12 @@ func TestMetricsEmptyHitRate(t *testing.T) {
 		t.Fatal("empty hit_rate should be 0.0")
 	}
 }
+
+func TestMetricsHedgeCountersZeroFilled(t *testing.T) {
+	s := NewMetrics().Snapshot()
+	for _, k := range []string{"peer_hedge_fired", "peer_hedge_peer_won", "peer_hedge_cdn_won", "peer_bytes_wasted"} {
+		if v, ok := s[k]; !ok || v.(int64) != 0 {
+			t.Fatalf("snapshot[%q] = %v (ok=%v), want int64(0)", k, v, ok)
+		}
+	}
+}

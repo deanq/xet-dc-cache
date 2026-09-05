@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrometheusText(t *testing.T) {
@@ -48,5 +49,32 @@ func TestPrometheusEveryMetricHasType(t *testing.T) {
 	}
 	if types != samples {
 		t.Fatalf("%d TYPE lines but %d samples — every metric needs a TYPE", types, samples)
+	}
+}
+
+func TestPrometheusHedgeSeries(t *testing.T) {
+	s := &Server{
+		metrics:   NewMetrics(),
+		signed:    NewTTLMap(3600e9, 100, nil),
+		lru:       newLRU(0, 0, nil, func(string) {}),
+		peerStats: newPeerStats(),
+	}
+	s.metrics.Incr("peer_hedge_fired", 4)
+	s.metrics.Incr("peer_hedge_peer_won", 1)
+	s.metrics.Incr("peer_hedge_cdn_won", 3)
+	s.metrics.Incr("peer_bytes_wasted", 2048)
+	s.peerStats.update("https://a:8000", 1000, 1*time.Millisecond) // 1000 bytes/ms
+
+	out := s.prometheusText()
+	for _, want := range []string{
+		"# TYPE xet_peer_hedge_fired_total counter\nxet_peer_hedge_fired_total 4\n",
+		"xet_peer_hedge_peer_won_total 1\n",
+		"xet_peer_hedge_cdn_won_total 3\n",
+		"xet_peer_bytes_wasted_total 2048\n",
+		"# TYPE xet_peer_throughput_bytes_per_ms gauge\nxet_peer_throughput_bytes_per_ms 1000\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in exposition:\n%s", want, out)
+		}
 	}
 }

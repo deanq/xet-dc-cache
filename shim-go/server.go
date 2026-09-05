@@ -14,15 +14,19 @@ type httpDoer interface {
 
 // Server plays all three roles (hub proxy / CAS relay / xorb store).
 type Server struct {
-	hfUpstream       string
-	casUpstream      string
-	publicBase       string
-	cacheDir         string
-	signed           *TTLMap
-	manifests        *ManifestCache
-	metrics          *Metrics
-	lru              *lruCache
-	doer             httpDoer
+	hfUpstream  string
+	casUpstream string
+	publicBase  string
+	cacheDir    string
+	signed      *TTLMap
+	manifests   *ManifestCache
+	metrics     *Metrics
+	lru         *lruCache
+	doer        httpDoer
+	// peerDoer carries peer traffic on a dedicated, HTTP/1.1-forced transport
+	// (see newPeerTransport). Kept distinct from doer so peer tuning never
+	// perturbs the CDN redirect/identity contract. nil => fall back to doer.
+	peerDoer         httpDoer
 	sf               singleflight.Group
 	signedCandidates int
 
@@ -43,6 +47,18 @@ type Server struct {
 	// peerProbeTimeout, which only budgets the HEAD probe). Zero disables the
 	// bound (used by tests that don't set it).
 	peerFetchTimeout time.Duration
+	peerStats        *peerStats
+
+	// Adaptive hedge (Mechanism B): give the peer a head start sized by its
+	// recent throughput, then race the CDN. peerStats holds the per-peer EWMA.
+	hedgeFactor float64 // multiplier on predicted peer time before hedging the CDN
+	hedgeMinMs  int     // floor on the hedge delay
+	hedgeMaxMs  int     // cap on the hedge delay = the guarantee's bounded slack
+
+	// nowFn and hedgeAfter are test seams (clock injection). Both nil in
+	// production => real time.Now / time.After.
+	nowFn      func() time.Time
+	hedgeAfter func(time.Duration) <-chan time.Time
 }
 
 // acquire takes a fetch slot, honoring the caller's context so a client that
@@ -65,3 +81,22 @@ func (s *Server) release() {
 		<-s.sem
 	}
 }
+
+// peerHTTP returns the doer used for peer traffic: the dedicated tuned peer
+// transport when configured, else the CDN doer (keeps tests that only set doer
+// working, and keeps peering functional if the peer transport is unset).
+func (s *Server) peerHTTP() httpDoer {
+	if s.peerDoer != nil {
+		return s.peerDoer
+	}
+	return s.doer
+}
+
+// now returns the current time via the injected clock (tests) or the wall clock.
+func (s *Server) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
+}
+

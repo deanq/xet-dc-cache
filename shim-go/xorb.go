@@ -131,10 +131,11 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := s.sf.Do(name, func() (any, error) {
-		// Tier 1.5: try a warm peer before the CDN. Peer serves don't consume
-		// a CDN slot and don't count as WAN.
+		// Tier 1.5: race a warm peer against a hedged CDN pull before the plain
+		// CDN path. recordRaceWin books peer_bytes (peer won) or wan_bytes (CDN
+		// won); misses is counted once here.
 		if s.peers != nil {
-			if res, ok := s.fetchFromPeer(r.Context(), hash, byteRange); ok {
+			if res, _, ok := s.fetchFromPeer(r.Context(), hash, byteRange); ok {
 				if werr := writeCacheFileAtomic(s.cacheDir, name, path, res.body); werr != nil {
 					return nil, &httpError{500, "cache write: " + werr.Error()}
 				}

@@ -112,8 +112,10 @@ manifest is deferred to Step 3 so it's shaped by the topology decision.
   `status`, `x_cache`, `bytes`, `dur_ms`. Under systemd they land in the journal
   (`journalctl -u xet-dc-cache -o cat | jq`).
 
-Suggested alerts: `xet_hit_rate` dropping, disk pressure on `CACHE_DIR`, and a
-rising upstream error rate (4xx/5xx in the request logs).
+Suggested alerts: `xet_effective_hit_rate` dropping (prefer this over
+`xet_hit_rate` when peering is on — plain `xet_hit_rate` counts a peer-served
+range as a miss and so understates a healthy fleet), disk pressure on
+`CACHE_DIR`, and a rising upstream error rate (4xx/5xx in the request logs).
 
 ## Security / trust boundary
 

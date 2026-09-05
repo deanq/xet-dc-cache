@@ -23,6 +23,21 @@ func TestMetricsEmptyHitRate(t *testing.T) {
 	}
 }
 
+func TestMetricsEffectiveHitRateCreditsPeer(t *testing.T) {
+	m := NewMetrics()
+	// One disk hit, one peer-served miss (peer wins book both misses & peer_hits).
+	m.Incr("hits", 1)
+	m.Incr("misses", 1)
+	m.Incr("peer_hits", 1)
+	s := m.Snapshot()
+	if s["hit_rate"].(float64) != 0.5 {
+		t.Fatalf("hit_rate = %v, want 0.5 (peer win counts as a miss)", s["hit_rate"])
+	}
+	if s["effective_hit_rate"].(float64) != 1.0 {
+		t.Fatalf("effective_hit_rate = %v, want 1.0 (both served without CDN)", s["effective_hit_rate"])
+	}
+}
+
 func TestMetricsHedgeCountersZeroFilled(t *testing.T) {
 	s := NewMetrics().Snapshot()
 	for _, k := range []string{"peer_hedge_fired", "peer_hedge_peer_won", "peer_hedge_cdn_won", "peer_bytes_wasted", "peer_hedge_cdn_bytes"} {

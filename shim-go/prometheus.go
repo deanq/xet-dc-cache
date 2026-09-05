@@ -43,7 +43,9 @@ func (s *Server) prometheusText() string {
 	promMetric(&b, "xet_wan_bytes_saved", "gauge",
 		"served_bytes - wan_bytes: WAN transfer the cache eliminated.", snap["wan_bytes_saved"])
 	promMetric(&b, "xet_hit_rate", "gauge",
-		"hits / (hits + misses).", snap["hit_rate"])
+		"hits / (hits + misses). Counts a peer-served range as a miss.", snap["hit_rate"])
+	promMetric(&b, "xet_effective_hit_rate", "gauge",
+		"(hits + peer_hits) / (hits + misses): share of requests served without a CDN fetch.", snap["effective_hit_rate"])
 	promMetric(&b, "xet_signed_urls_tracked", "gauge",
 		"Distinct xorb hashes with a live signed CDN url.", int64(s.signed.Len()))
 	promMetric(&b, "xet_cache_bytes", "gauge",

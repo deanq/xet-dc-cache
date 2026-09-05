@@ -100,10 +100,17 @@ func (m *Metrics) Snapshot() map[string]any {
 	out["wan_bytes_saved"] = m.c["served_bytes"] - m.c["wan_bytes"]
 	total := m.c["hits"] + m.c["misses"]
 	rate := 0.0
+	effRate := 0.0
 	if total > 0 {
 		rate = math.Round(float64(m.c["hits"])/float64(total)*10000) / 10000
+		// A peer win books both misses and peer_hits, so plain hit_rate reads a
+		// healthy peering fleet as a cold cache. effective_hit_rate credits
+		// peer-served ranges: the share of requests served without a CDN fetch.
+		served := m.c["hits"] + m.c["peer_hits"]
+		effRate = math.Round(float64(served)/float64(total)*10000) / 10000
 	}
 	out["hit_rate"] = rate
+	out["effective_hit_rate"] = effRate
 
 	for _, k := range []string{
 		"hits", "misses", "wan_bytes", "served_bytes",

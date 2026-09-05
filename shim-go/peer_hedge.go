@@ -38,6 +38,13 @@ type raceResult struct {
 // bound is measured from when the race starts; on the fan-out discovery path
 // one peer HEAD RTT precedes the race (the sticky path avoids it), so real
 // slack on a cold/non-sticky range is discovery RTT + PEER_HEDGE_MAX_MS.
+//
+// The bound is PER RACE. raceOnePeer returns ok=false only when BOTH its peer
+// and CDN sides fail, so on cascading CDN failure the caller (fetchFromPeer)
+// can run a sticky race then a fan-out race, and getXorb then still runs the
+// plain CDN path — up to three sequential CDN attempts. That is resilience
+// (retry on CDN failure), not a violation, but the per-request worst case
+// exceeds this per-race bound whenever the CDN is failing.
 func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) (xorbResult, hedgeSource, bool) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

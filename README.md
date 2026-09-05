@@ -78,8 +78,14 @@ sequenceDiagram
 
 Step 4 above is where caching happens. Peering is a strict accelerator: every
 peer failure mode falls through to the CDN, so a request can never *fail* that the
-CDN would have served — and it can never be *slower* than a direct WAN pull beyond
-`PEER_HEDGE_MAX_MS`, because a lagging peer is raced against the CDN (below).
+CDN would have served. Latency bound: within a **single** peer race a lagging
+peer is raced against the CDN, so that race finishes within `PEER_HEDGE_MAX_MS`
+of a direct WAN pull (plus one discovery HEAD RTT on a cold, non-sticky range).
+This bound is **per race**, not per request: when the CDN *itself* fails, the
+miss path retries — a failed sticky race clears the sticky peer and a fan-out
+race is tried, and if that also fails (peer *and* CDN) the plain CDN path runs
+as a last resort. That resilience chain is gated entirely on CDN failure, but
+when it triggers the request can take longer than the single-race bound.
 
 ```mermaid
 flowchart TD
@@ -163,7 +169,7 @@ docs/        Design + reference prose (see below).
   game; content-address verification is not achievable via the client API.
 - `docs/lfs-support-handoff.md` — proposed follow-up: add git-LFS caching to the Go shim.
 - `docs/superpowers/specs/2026-09-03-peer-transfer-optimization-design.md` — the
-  tuned peer transport + adaptive hedge ("never slower than WAN") design.
+  tuned peer transport + adaptive hedge (bounded per-race slack vs. WAN) design.
 - `docs/superpowers/` — the spec + plan + acceptance notes for the Go rewrite.
 
 ---

@@ -166,9 +166,14 @@ optional socket buffers, optional keepalive) so a peer pull starts warm.
 **(B)** an **adaptive hedged race** (`peer_hedge.go` `raceOnePeer`): fire the peer
 `GET`, give it a head start sized by the peer's throughput EWMA (`peerStats`),
 and if it runs long, race a CDN pull in parallel, take the first to finish, and
-cancel the loser. This bounds client latency to `WAN + PEER_HEDGE_MAX_MS` — a
-peer pull can never leave a client slower than a direct WAN pull beyond that
-slack. The sticky path fires a **bare peer GET** (no HEAD — a peer serves
+cancel the loser. This bounds a **single race** to `WAN + PEER_HEDGE_MAX_MS`
+(plus one discovery HEAD RTT on a cold, non-sticky range). The bound is
+**per-race, not per-request**: `raceOnePeer` returns failure only when its peer
+*and* CDN sides both fail, so on cascading CDN failure `fetchFromPeer` can run a
+sticky race, then a fan-out race, and `getXorb` then still runs the plain CDN
+path — up to three sequential CDN attempts. That chain is gated on CDN failure
+(healthy-CDN requests always finish in the first race) but exceeds the single-race
+bound when it triggers. The sticky path fires a **bare peer GET** (no HEAD — a peer serves
 hit-or-404, so a 404 *is* the miss signal); the fan-out **HEAD** probe stays for
 discovery. Peer-served bytes count as `peer_bytes`, a hedged CDN win as
 `wan_bytes`; the decision metric is `xet_peer_bytes_total` vs `xet_wan_bytes_total`.

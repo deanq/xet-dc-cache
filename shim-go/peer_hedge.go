@@ -58,22 +58,22 @@ func (s *Server) raceOnePeer(ctx context.Context, base, hash, byteRange string) 
 	defer cancel()
 
 	size := rangeSize(byteRange)
-	delay := s.peerStats.hedgeDelay(base, size, s.hedgeFactor, s.hedgeMinMs, s.hedgeMaxMs)
+	delay := s.peer.stats.hedgeDelay(base, size, s.peer.hedgeFactor, s.peer.hedgeMinMs, s.peer.hedgeMaxMs)
 
 	peerCh := make(chan raceResult, 1)
 	go func() {
 		start := s.now()
 		res, ok := s.peerGet(ctx, base, hash, byteRange)
 		if ok {
-			s.peerStats.update(base, int64(len(res.body)), s.now().Sub(start))
+			s.peer.stats.update(base, int64(len(res.body)), s.now().Sub(start))
 		}
 		peerCh <- raceResult{res: res, src: srcPeer, ok: ok}
 	}()
 
 	// Head start: peer wins outright if it finishes before the timer.
 	var timerC <-chan time.Time
-	if s.hedgeAfter != nil {
-		timerC = s.hedgeAfter(delay)
+	if s.peer.hedgeAfter != nil {
+		timerC = s.peer.hedgeAfter(delay)
 	} else {
 		t := time.NewTimer(delay)
 		defer t.Stop()

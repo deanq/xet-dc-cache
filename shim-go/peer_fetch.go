@@ -12,10 +12,10 @@ import (
 // only when no peer had the range, in which case getXorb falls through to the
 // plain CDN path. When a race runs, ok=true and hedgeSource says who won.
 func (s *Server) fetchFromPeer(ctx context.Context, hash, byteRange string) (xorbResult, hedgeSource, bool) {
-	if s.peers == nil {
+	if s.peer.peers == nil {
 		return xorbResult{}, srcPeer, false
 	}
-	peers := s.peers.Peers()
+	peers := s.peer.peers.Peers()
 	if len(peers) == 0 {
 		return xorbResult{}, srcPeer, false
 	}
@@ -24,13 +24,13 @@ func (s *Server) fetchFromPeer(ctx context.Context, hash, byteRange string) (xor
 	// miss signal — getXorb serves peers hit-or-404). A win keeps sticky (peer)
 	// or drops it (CDN raced past a slow sticky peer); any failure clears it and
 	// falls through to fan-out discovery.
-	if url, live := s.sticky.get(); live {
+	if url, live := s.peer.sticky.get(); live {
 		if res, src, ok := s.raceOnePeer(ctx, url, hash, byteRange); ok {
 			s.updateSticky(url, src)
 			s.recordRaceWin(res, src)
 			return res, src, true
 		}
-		s.sticky.clear()
+		s.peer.sticky.clear()
 	}
 
 	// 2. Fan-out HEAD probe for discovery (which of N peers has the range), then
@@ -52,9 +52,9 @@ func (s *Server) fetchFromPeer(ctx context.Context, hash, byteRange string) (xor
 // a slow peer (so a burst doesn't keep betting on the laggard).
 func (s *Server) updateSticky(url string, src hedgeSource) {
 	if src == srcPeer {
-		s.sticky.set(url)
+		s.peer.sticky.set(url)
 	} else {
-		s.sticky.clear()
+		s.peer.sticky.clear()
 	}
 }
 
@@ -77,7 +77,7 @@ func (s *Server) recordRaceWin(res xorbResult, src hedgeSource) {
 // fanoutProbe HEAD-probes all peers in parallel under one shared budget and
 // returns the first that has the range. Cancels the rest once a winner is found.
 func (s *Server) fanoutProbe(ctx context.Context, peers []string, hash, byteRange string) (string, bool) {
-	pctx, cancel := context.WithTimeout(ctx, s.peerProbeTimeout)
+	pctx, cancel := context.WithTimeout(ctx, s.peer.probeTimeout)
 	defer cancel()
 
 	found := make(chan string, len(peers))
@@ -125,9 +125,9 @@ func (s *Server) headProbe(ctx context.Context, base, hash, byteRange string) bo
 // peerGet fetches the range from base and verifies the body length matches the
 // request. Returns (result, true) only on a clean 206 of the expected size.
 func (s *Server) peerGet(ctx context.Context, base, hash, byteRange string) (xorbResult, bool) {
-	if s.peerFetchTimeout > 0 {
+	if s.peer.fetchTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.peerFetchTimeout)
+		ctx, cancel = context.WithTimeout(ctx, s.peer.fetchTimeout)
 		defer cancel()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/xorb/xorbs/default/"+hash, nil)

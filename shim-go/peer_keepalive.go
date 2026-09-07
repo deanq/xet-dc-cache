@@ -13,7 +13,7 @@ import (
 // net.ipv4.tcp_slow_start_after_idle=0 (documented in the deploy notes).
 // Blocks until stop closes; a nil stop channel runs for the process lifetime.
 func (s *Server) startPeerKeepalive(interval time.Duration, stop <-chan struct{}) {
-	if interval <= 0 || s.peers == nil {
+	if interval <= 0 || s.peer.peers == nil {
 		return
 	}
 	ticker := time.NewTicker(interval)
@@ -23,7 +23,7 @@ func (s *Server) startPeerKeepalive(interval time.Duration, stop <-chan struct{}
 		case <-stop:
 			return
 		case <-ticker.C:
-			for _, base := range s.peers.Peers() {
+			for _, base := range s.peer.peers.Peers() {
 				s.pingPeer(base)
 			}
 		}
@@ -34,9 +34,9 @@ func (s *Server) startPeerKeepalive(interval time.Duration, stop <-chan struct{}
 // the probe timeout so a dead peer never blocks the loop.
 func (s *Server) pingPeer(base string) {
 	ctx := context.Background()
-	if s.peerProbeTimeout > 0 {
+	if s.peer.probeTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.peerProbeTimeout)
+		ctx, cancel = context.WithTimeout(ctx, s.peer.probeTimeout)
 		defer cancel()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, base+"/healthz", nil)

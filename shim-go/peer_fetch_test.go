@@ -56,17 +56,19 @@ func (d *peerDoer) Do(req *http.Request) (*http.Response, error) {
 
 func newPeerFetchServer(peers []string, d httpDoer) *Server {
 	return &Server{
-		metrics:          NewMetrics(),
-		doer:             d,
-		peerDoer:         d,
-		peers:            staticPeers{list: peers},
-		sticky:           newStickyPeer(60*time.Second, nil),
-		peerProbeTimeout: 200 * time.Millisecond,
-		peerFetchTimeout: 2 * time.Second,
-		peerStats:        newPeerStats(),
-		hedgeFactor:      1.5,
-		hedgeMinMs:       50,
-		hedgeMaxMs:       1000,
+		metrics: NewMetrics(),
+		doer:    d,
+		peer: peerEngine{
+			doer:         d,
+			peers:        staticPeers{list: peers},
+			sticky:       newStickyPeer(60*time.Second, nil),
+			probeTimeout: 200 * time.Millisecond,
+			fetchTimeout: 2 * time.Second,
+			stats:        newPeerStats(),
+			hedgeFactor:  1.5,
+			hedgeMinMs:   50,
+			hedgeMaxMs:   1000,
+		},
 	}
 }
 
@@ -85,7 +87,7 @@ func TestFetchFromPeerFanoutHit(t *testing.T) {
 		t.Fatalf("metrics = %+v", snap)
 	}
 	// The winner should now be sticky.
-	if url, live := s.sticky.get(); !live || url != "https://b:8000" {
+	if url, live := s.peer.sticky.get(); !live || url != "https://b:8000" {
 		t.Fatalf("sticky = (%q,%v), want b live", url, live)
 	}
 }
@@ -93,7 +95,7 @@ func TestFetchFromPeerFanoutHit(t *testing.T) {
 func TestFetchFromPeerStickyReused(t *testing.T) {
 	d := &peerDoer{have: map[string]map[string]bool{"https://b:8000": {"h": true, "h2": true}}, body: "BYTES"}
 	s := newPeerFetchServer([]string{"https://a:8000", "https://b:8000"}, d)
-	s.sticky.set("https://b:8000")
+	s.peer.sticky.set("https://b:8000")
 
 	res, _, ok := s.fetchFromPeer(context.Background(), "h", "bytes=0-4")
 	if !ok || string(res.body) != "BYTES" {
@@ -127,7 +129,7 @@ func TestFetchFromPeerTimeoutFallsThrough(t *testing.T) {
 		hang: map[string]bool{"https://a:8000": true, "https://b:8000": true},
 	}
 	s := newPeerFetchServer([]string{"https://a:8000", "https://b:8000"}, d)
-	s.peerProbeTimeout = 50 * time.Millisecond
+	s.peer.probeTimeout = 50 * time.Millisecond
 
 	start := time.Now()
 	_, _, ok := s.fetchFromPeer(context.Background(), "h", "bytes=0-4")
@@ -172,11 +174,14 @@ func TestGetXorbServesFromPeerEndToEnd(t *testing.T) {
 	// a 206 therefore proves the peer path served it.
 	a := &Server{
 		cacheDir: t.TempDir(), metrics: NewMetrics(), lru: newLRU(0, 0, nil, func(string) {}),
-		signed: NewTTLMap(3600e9, 100, nil), doer: http.DefaultClient, peerDoer: http.DefaultClient,
+		signed: NewTTLMap(3600e9, 100, nil), doer: http.DefaultClient,
 		signedCandidates: 8,
-		peers:            staticPeers{list: []string{ts.URL}}, sticky: newStickyPeer(time.Minute, nil),
-		peerProbeTimeout: time.Second, peerFetchTimeout: 2 * time.Second,
-		peerStats: newPeerStats(), hedgeFactor: 1.5, hedgeMinMs: 50, hedgeMaxMs: 1000,
+		peer: peerEngine{
+			doer:  http.DefaultClient,
+			peers: staticPeers{list: []string{ts.URL}}, sticky: newStickyPeer(time.Minute, nil),
+			probeTimeout: time.Second, fetchTimeout: 2 * time.Second,
+			stats: newPeerStats(), hedgeFactor: 1.5, hedgeMinMs: 50, hedgeMaxMs: 1000,
+		},
 	}
 	a.signed.Set("h", nil)
 
@@ -207,7 +212,7 @@ func TestFetchFromPeerGetBodyHangBounded(t *testing.T) {
 		hangGet: map[string]bool{"https://b:8000": true},
 	}
 	s := newPeerFetchServer([]string{"https://b:8000"}, d)
-	s.peerFetchTimeout = 50 * time.Millisecond
+	s.peer.fetchTimeout = 50 * time.Millisecond
 
 	start := time.Now()
 	_, _, ok := s.fetchFromPeer(context.Background(), "h", "bytes=0-4")
@@ -229,13 +234,13 @@ func TestFetchFromPeerStickyClearedOnGetFailure(t *testing.T) {
 		hangGet: map[string]bool{"https://b:8000": true},
 	}
 	s := newPeerFetchServer([]string{"https://b:8000"}, d)
-	s.peerFetchTimeout = 50 * time.Millisecond
-	s.sticky.set("https://b:8000")
+	s.peer.fetchTimeout = 50 * time.Millisecond
+	s.peer.sticky.set("https://b:8000")
 
 	if _, _, ok := s.fetchFromPeer(context.Background(), "h", "bytes=0-4"); ok {
 		t.Fatal("sticky peer with hanging GET should return false")
 	}
-	if _, live := s.sticky.get(); live {
+	if _, live := s.peer.sticky.get(); live {
 		t.Fatal("sticky pointer should be cleared after a failed sticky GET")
 	}
 }
@@ -248,13 +253,13 @@ func TestFetchFromPeerStickyBareGetMissFallsToFanout(t *testing.T) {
 		body: "BYTES",
 	}
 	s := newPeerFetchServer([]string{"https://b:8000", "https://c:8000"}, d)
-	s.sticky.set("https://b:8000") // stale sticky; b lacks h
+	s.peer.sticky.set("https://b:8000") // stale sticky; b lacks h
 
 	res, src, ok := s.fetchFromPeer(context.Background(), "h", "bytes=0-4")
 	if !ok || src != srcPeer || string(res.body) != "BYTES" {
 		t.Fatalf("fanout recovery = (%q,%v,%v), want BYTES,srcPeer,true", res.body, src, ok)
 	}
-	if url, live := s.sticky.get(); !live || url != "https://c:8000" {
+	if url, live := s.peer.sticky.get(); !live || url != "https://c:8000" {
 		t.Fatalf("sticky = (%q,%v), want c live after fanout recovery", url, live)
 	}
 }

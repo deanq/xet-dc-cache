@@ -333,7 +333,7 @@ suite + `go vet` + `gofmt` green throughout). Summary:
 | 9 | hit_rate counts peer wins as misses | **Fixed.** Added `effective_hit_rate`; alert guidance updated. |
 | 10 | signedCandidates hardcoded | **Fixed.** `SIGNED_CANDIDATES_PER_XORB` env (default 8). |
 | 8 | No graceful shutdown | **Fixed.** `http.Server.Shutdown` on SIGTERM/SIGINT (25s drain); keepalive gets a real stop channel. |
-| 13 | Server god-struct | **Deferred** (intentional). Large mechanical refactor across every handler + test constructor, zero behavior change, low value; the finding itself said "don't do speculatively." Left for a supervised session. |
+| 13 | Server god-struct | **Fixed** (supervised, 2026-09-07). Extracted a data-only `peerEngine` sub-struct (`peer peerEngine`) grouping the Tier-1.5 surface — doer, peers, sticky, probe/fetch timeouts, per-peer stats, hedge tuning, and the `hedgeAfter` test seam. Methods stay on `*Server` (they need metrics, the fetch semaphore, and the clock) and now read `s.peer.*`; `nowFn` stays on `Server` since the plain hit/miss path uses it. Zero behavior change; `-race`/`vet`/full suite green. |
 
 ### Whole-branch review outcome
 

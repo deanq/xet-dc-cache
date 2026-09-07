@@ -67,6 +67,17 @@ func (s *Server) hub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cleanHeaders(w.Header(), upstream.Header)
+	// Preserve the upstream Content-Length on the pass-through. cleanHeaders
+	// strips it (it's needed off the token-rewrite path, which changes the body
+	// length), but here the shim relays the body verbatim, so the upstream
+	// length is correct. This matters most for a HEAD to `resolve`: a non-LFS
+	// file (config.json, tokenizer.json, …) carries its size ONLY in
+	// Content-Length (LFS files use X-Linked-Size), and huggingface_hub's
+	// metadata HEAD fails with "no Content-Length" without it — which breaks
+	// every full snapshot_download through the shim.
+	if cl := upstream.Header.Get("Content-Length"); cl != "" {
+		w.Header().Set("Content-Length", cl)
+	}
 	w.WriteHeader(upstream.StatusCode)
 	_, _ = w.Write(body)
 }

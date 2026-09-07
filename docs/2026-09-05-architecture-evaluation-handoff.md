@@ -354,13 +354,16 @@ wouldn't have a matching cache entry).
 
 ### New finding discovered during validation (NOT yet fixed)
 
-**Content-Length stripping breaks HEAD metadata for non-LFS small files (Medium, needs impact check).**
-A real `hf_hub_download` of a small git-stored file (e.g. `tokenizer.json`) through the shim fails with
-`LocalEntryNotFoundError: Distant resource does not have a Content-Length`. Reproduces with **no auth
-token**, so it is unrelated to finding #1. Root cause: the hub handler strips `Content-Length` via
-`cleanHeaders` (`proxy.go:69`, hop-by-hop list `util.go:38`); on a HEAD (huggingface_hub's metadata call)
-no body is written, so `net/http` cannot re-derive it and the HEAD response lacks `Content-Length`. LFS/Xet
-files carry `X-Linked-Size` and work — which is why `acceptance.py` (only `model.safetensors`) never caught
-it. **Must verify production impact**: does a full `snapshot_download` (which pulls `config.json`,
-`tokenizer.json`, etc.) fail through the shim? If so this is High. Likely fix: preserve upstream
-`Content-Length` on HEAD proxying. Tracked as a follow-up task.
+**Content-Length stripping breaks non-LFS files — CONFIRMED High, FIXED + validated (2026-09-07).**
+A full `snapshot_download` through the shim **failed outright** (`LocalEntryNotFoundError: Distant
+resource does not have a Content-Length`) while the direct control pulled all 26 files — so the shim
+was unusable for a normal model pull; only the single LFS/Xet `model.safetensors` ever worked (which is
+why `acceptance.py` missed it). Reproduces with **no auth token**, so unrelated to finding #1. Root
+cause, proven by capturing HEAD `resolve` headers: a non-LFS file's size lives ONLY in `Content-Length`
+(LFS files carry `X-Linked-Size`, not hop-by-hop, so they survive), and `cleanHeaders` strips
+`Content-Length` (`util.go:38`) on the hub pass-through (`proxy.go`). **Fix** (branch
+`fix/head-content-length`): preserve the upstream `Content-Length` on the pass-through — the shim relays
+that body verbatim, so the length is correct; only the token-rewrite path (which changes the body) needs
+it dropped. **Validated end-to-end**: a full `snapshot_download` through the fixed shim now succeeds with
+a byte-size-identical file set to the direct control; unit regression `TestHubPreservesContentLengthOnHeadResolve`
+added; `-race`/`vet`/`gofmt` green.

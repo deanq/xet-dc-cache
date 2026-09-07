@@ -118,6 +118,13 @@ reader will not infer them from any single file:
   same dir + rename, so a partial write never becomes a false HIT. `seedLRU`
   (`main.go`) skips dotfiles for this reason (temp debris) and the `manifests`
   subdir.
+- **The hub pass-through must preserve upstream `Content-Length`** (`proxy.go`). A HEAD to `resolve`
+  for a **non-LFS** file (config.json, tokenizer.json, most repo files) carries its size ONLY in
+  `Content-Length`; LFS/Xet files use `X-Linked-Size`. `cleanHeaders` strips `Content-Length` (it must,
+  for the body-rewriting token path), so the pass-through re-sets it from upstream. Drop it and every
+  full `snapshot_download` fails with huggingface_hub's "Distant resource does not have a Content-Length"
+  — the shim silently works for the big safetensors (X-Linked-Size) but not the small companion files.
+  Regression-tested in `proxy_test.go` (`TestHubPreservesContentLengthOnHeadResolve`).
 - **HTTP client**: `CheckRedirect → http.ErrUseLastResponse` (no redirect
   following — the 302 must reach the client), `DisableCompression`, and every
   upstream request sets `Accept-Encoding: identity`.

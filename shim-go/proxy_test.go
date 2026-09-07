@@ -68,6 +68,24 @@ func TestHubRewritesTokenCasUrlHeader(t *testing.T) {
 	}
 }
 
+// A HEAD to `resolve` for a non-LFS file carries its size ONLY in
+// Content-Length (LFS files use X-Linked-Size). The proxy must preserve it, or
+// huggingface_hub's metadata HEAD fails with "no Content-Length" and every full
+// snapshot_download through the shim breaks (finding #12).
+func TestHubPreservesContentLengthOnHeadResolve(t *testing.T) {
+	h := http.Header{}
+	h.Set("Content-Length", "861")
+	h.Set("Location", "/api/resolve-cache/models/foo/abc/config.json")
+	resp := &http.Response{StatusCode: 307, Body: io.NopCloser(strings.NewReader("")), Header: h}
+	s := newHubServer(&urlCapturingDoer{resp: resp})
+	req := httptest.NewRequest("HEAD", "/models/foo/resolve/main/config.json", nil)
+	rec := httptest.NewRecorder()
+	s.hub(rec, req)
+	if got := rec.Header().Get("Content-Length"); got != "861" {
+		t.Fatalf("Content-Length = %q, want 861 (non-LFS file size must survive the proxy)", got)
+	}
+}
+
 func TestHubPassesThrough302(t *testing.T) {
 	h := http.Header{}
 	h.Set("Location", "https://cdn/xorb")

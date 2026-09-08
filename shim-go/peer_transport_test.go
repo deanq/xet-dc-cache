@@ -42,12 +42,12 @@ func TestPeerHTTPFallsBackToCDNDoer(t *testing.T) {
 	c := &countingDoer{}
 	s := &Server{doer: c}
 	if s.peerHTTP() != httpDoer(c) {
-		t.Fatal("peerHTTP must fall back to s.doer when peerDoer is nil")
+		t.Fatal("peerHTTP must fall back to s.doer when s.peer.doer is nil")
 	}
 	pc := &countingDoer{}
-	s.peerDoer = pc
+	s.peer.doer = pc
 	if s.peerHTTP() != httpDoer(pc) {
-		t.Fatal("peerHTTP must return s.peerDoer when set")
+		t.Fatal("peerHTTP must return s.peer.doer when set")
 	}
 }
 

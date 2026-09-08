@@ -14,19 +14,15 @@ type httpDoer interface {
 
 // Server plays all three roles (hub proxy / CAS relay / xorb store).
 type Server struct {
-	hfUpstream  string
-	casUpstream string
-	publicBase  string
-	cacheDir    string
-	signed      *TTLMap
-	manifests   *ManifestCache
-	metrics     *Metrics
-	lru         *lruCache
-	doer        httpDoer
-	// peerDoer carries peer traffic on a dedicated, HTTP/1.1-forced transport
-	// (see newPeerTransport). Kept distinct from doer so peer tuning never
-	// perturbs the CDN redirect/identity contract. nil => fall back to doer.
-	peerDoer         httpDoer
+	hfUpstream       string
+	casUpstream      string
+	publicBase       string
+	cacheDir         string
+	signed           *TTLMap
+	manifests        *ManifestCache
+	metrics          *Metrics
+	lru              *lruCache
+	doer             httpDoer
 	sf               singleflight.Group
 	signedCandidates int
 
@@ -38,26 +34,46 @@ type Server struct {
 	// (the trusted-LAN default). See withAuth in middleware.go.
 	authToken string
 
-	// Peering ("Tier 1.5"): pull a warm range from a sibling cache over the
-	// private backbone before falling back to the CDN. nil peers = disabled.
-	peers            PeerSet
-	sticky           *stickyPeer
-	peerProbeTimeout time.Duration
-	// peerFetchTimeout bounds the peer GET request + body read (separate from
-	// peerProbeTimeout, which only budgets the HEAD probe). Zero disables the
-	// bound (used by tests that don't set it).
-	peerFetchTimeout time.Duration
-	peerStats        *peerStats
+	// peer groups the entire "Tier 1.5" peering surface (config, per-peer
+	// state, hedge tuning, test seam). Its zero value = peering disabled, so a
+	// Server built without it behaves exactly as a non-peering shim.
+	peer peerEngine
+
+	// nowFn is a test seam (clock injection), nil in production => time.Now. It
+	// lives on Server (not peerEngine) because the plain xorb hit/miss path uses
+	// it too; peerEngine.hedgeAfter is the peer-only companion seam.
+	nowFn func() time.Time
+}
+
+// peerEngine isolates the "Tier 1.5" peer cache surface: pull a warm range from
+// a sibling cache over the private backbone before falling back to the CDN. The
+// methods that drive it stay on *Server (they need metrics, the fetch semaphore,
+// and the clock); this struct just namespaces the peer-specific state so the
+// Server god-struct no longer mixes it in with the hub/relay/store roles.
+type peerEngine struct {
+	// doer carries peer traffic on a dedicated, HTTP/1.1-forced transport (see
+	// newPeerTransport). Kept distinct from Server.doer so peer tuning never
+	// perturbs the CDN redirect/identity contract. nil => fall back to doer.
+	doer httpDoer
+
+	// peers is the sibling fleet; nil (the zero value) disables peering.
+	peers        PeerSet
+	sticky       *stickyPeer
+	probeTimeout time.Duration
+	// fetchTimeout bounds the peer GET request + body read (separate from
+	// probeTimeout, which only budgets the HEAD probe). Zero disables the bound
+	// (used by tests that don't set it).
+	fetchTimeout time.Duration
+	stats        *peerStats
 
 	// Adaptive hedge (Mechanism B): give the peer a head start sized by its
-	// recent throughput, then race the CDN. peerStats holds the per-peer EWMA.
+	// recent throughput, then race the CDN. stats holds the per-peer EWMA.
 	hedgeFactor float64 // multiplier on predicted peer time before hedging the CDN
 	hedgeMinMs  int     // floor on the hedge delay
 	hedgeMaxMs  int     // cap on the hedge delay = the guarantee's bounded slack
 
-	// nowFn and hedgeAfter are test seams (clock injection). Both nil in
-	// production => real time.Now / time.After.
-	nowFn      func() time.Time
+	// hedgeAfter is a test seam (clock injection), nil in production =>
+	// time.After. Paired with Server.nowFn.
 	hedgeAfter func(time.Duration) <-chan time.Time
 }
 
@@ -103,8 +119,8 @@ func (s *Server) release() {
 // transport when configured, else the CDN doer (keeps tests that only set doer
 // working, and keeps peering functional if the peer transport is unset).
 func (s *Server) peerHTTP() httpDoer {
-	if s.peerDoer != nil {
-		return s.peerDoer
+	if s.peer.doer != nil {
+		return s.peer.doer
 	}
 	return s.doer
 }

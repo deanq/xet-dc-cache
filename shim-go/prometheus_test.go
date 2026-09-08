@@ -54,17 +54,17 @@ func TestPrometheusEveryMetricHasType(t *testing.T) {
 
 func TestPrometheusHedgeSeries(t *testing.T) {
 	s := &Server{
-		metrics:   NewMetrics(),
-		signed:    NewTTLMap(3600e9, 100, nil),
-		lru:       newLRU(0, 0, nil, func(string) {}),
-		peerStats: newPeerStats(),
+		metrics: NewMetrics(),
+		signed:  NewTTLMap(3600e9, 100, nil),
+		lru:     newLRU(0, 0, nil, func(string) {}),
+		peer:    peerEngine{stats: newPeerStats()},
 	}
 	s.metrics.Incr("peer_hedge_fired", 4)
 	s.metrics.Incr("peer_hedge_peer_won", 1)
 	s.metrics.Incr("peer_hedge_cdn_won", 3)
 	s.metrics.Incr("peer_bytes_wasted", 2048)
 	s.metrics.Incr("peer_hedge_cdn_bytes", 4096)
-	s.peerStats.update("https://a:8000", 1000, 1*time.Millisecond) // 1000 bytes/ms
+	s.peer.stats.update("https://a:8000", 1000, 1*time.Millisecond) // 1000 bytes/ms
 	s.metrics.Observe("cdn", 40)
 
 	out := s.prometheusText()

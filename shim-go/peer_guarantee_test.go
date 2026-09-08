@@ -39,7 +39,7 @@ func runGuaranteeCase(t *testing.T, peerMs, cdnMs int, peerDead bool) (hedgeSour
 	cdnRel := make(chan struct{})
 	d := &hedgeDoer{peerRelease: peerRel, cdnRelease: cdnRel, body: "BYTES", peerHas: true}
 	s := newHedgeServer(d, timer)
-	s.hedgeMaxMs = guaranteeMaxMs
+	s.peer.hedgeMaxMs = guaranteeMaxMs
 	s.nowFn = clk.Now
 	s.signed.Set("h", []string{"http://cdn/x"})
 
@@ -93,7 +93,7 @@ func TestGuaranteeMatrix(t *testing.T) {
 	}{
 		{"peer_fast_cdn_fast", 100, 100, false, srcPeer},
 		{"peer_fast_cdn_slow", 100, 400, false, srcPeer},
-		{"peer_slow_cdn_fast", 500, 100, false, srcCDN}, // hedge@200 + cdn 100 = 300 < peer 500
+		{"peer_slow_cdn_fast", 500, 100, false, srcCDN},  // hedge@200 + cdn 100 = 300 < peer 500
 		{"peer_slow_cdn_slow", 500, 400, false, srcPeer}, // cdn done @600 > peer @500
 		{"peer_dead_cdn_fast", 0, 100, true, srcCDN},
 		{"peer_dead_cdn_slow", 0, 400, true, srcCDN},
@@ -137,10 +137,13 @@ func TestIntegrationHealthyPeerZeroCDN(t *testing.T) {
 	cdn := &countingDoer{}
 	a := &Server{
 		cacheDir: t.TempDir(), metrics: NewMetrics(), lru: newLRU(0, 0, nil, func(string) {}),
-		signed: NewTTLMap(3600e9, 100, nil), doer: cdn, peerDoer: http.DefaultClient, signedCandidates: 8,
-		peers: staticPeers{list: []string{ts.URL}}, sticky: newStickyPeer(time.Minute, nil),
-		peerProbeTimeout: time.Second, peerFetchTimeout: 5 * time.Second,
-		peerStats: newPeerStats(), hedgeFactor: 1.5, hedgeMinMs: 50, hedgeMaxMs: 1000,
+		signed: NewTTLMap(3600e9, 100, nil), doer: cdn, signedCandidates: 8,
+		peer: peerEngine{
+			doer:  http.DefaultClient,
+			peers: staticPeers{list: []string{ts.URL}}, sticky: newStickyPeer(time.Minute, nil),
+			probeTimeout: time.Second, fetchTimeout: 5 * time.Second,
+			stats: newPeerStats(), hedgeFactor: 1.5, hedgeMinMs: 50, hedgeMaxMs: 1000,
+		},
 	}
 	a.signed.Set("h", []string{"http://cdn/x"})
 
@@ -170,10 +173,13 @@ func TestIntegrationThrottledPeerHedgesToCDN(t *testing.T) {
 	}
 	a := &Server{
 		cacheDir: t.TempDir(), metrics: NewMetrics(), lru: newLRU(0, 0, nil, func(string) {}),
-		signed: NewTTLMap(3600e9, 100, nil), doer: &countingDoer{}, peerDoer: pd, signedCandidates: 8,
-		peers: staticPeers{list: []string{"https://b:8000"}}, sticky: newStickyPeer(time.Minute, nil),
-		peerProbeTimeout: time.Second, peerFetchTimeout: 2 * time.Second,
-		peerStats: newPeerStats(), hedgeFactor: 1.5, hedgeMinMs: 50, hedgeMaxMs: 200,
+		signed: NewTTLMap(3600e9, 100, nil), doer: &countingDoer{}, signedCandidates: 8,
+		peer: peerEngine{
+			doer:  pd,
+			peers: staticPeers{list: []string{"https://b:8000"}}, sticky: newStickyPeer(time.Minute, nil),
+			probeTimeout: time.Second, fetchTimeout: 2 * time.Second,
+			stats: newPeerStats(), hedgeFactor: 1.5, hedgeMinMs: 50, hedgeMaxMs: 200,
+		},
 	}
 	a.signed.Set("h", []string{"http://cdn/x"})
 

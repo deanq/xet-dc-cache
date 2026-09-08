@@ -51,16 +51,16 @@ func (s *Server) prometheusText() string {
 	promMetric(&b, "xet_cache_bytes", "gauge",
 		"Bytes currently accounted in the Tier 1 LRU.", s.lru.TotalBytes())
 	var throughput float64
-	if s.peerStats != nil {
-		throughput = s.peerStats.fleetThroughput()
+	if s.peer.stats != nil {
+		throughput = s.peer.stats.fleetThroughput()
 	}
 	promMetric(&b, "xet_peer_throughput_bytes_per_ms", "gauge",
 		"Fleet-aggregate peer throughput EWMA (bytes/ms), used to size the hedge delay.", throughput)
 
 	// Per-peer throughput EWMA — a labeled gauge so one slow peer is visible
 	// where the fleet aggregate would hide it.
-	if s.peerStats != nil {
-		perPeer := s.peerStats.perPeer()
+	if s.peer.stats != nil {
+		perPeer := s.peer.stats.perPeer()
 		peers := make([]string, 0, len(perPeer))
 		for p := range perPeer {
 			peers = append(peers, p)

@@ -26,8 +26,10 @@ func (d *kaDoer) Do(req *http.Request) (*http.Response, error) {
 func TestPeerKeepalivePingsEveryPeer(t *testing.T) {
 	d := &kaDoer{}
 	s := &Server{
-		peerDoer: d,
-		peers:    staticPeers{list: []string{"https://a:8000", "https://b:8000"}},
+		peer: peerEngine{
+			doer:  d,
+			peers: staticPeers{list: []string{"https://a:8000", "https://b:8000"}},
+		},
 	}
 	stop := make(chan struct{})
 	go s.startPeerKeepalive(2*time.Millisecond, stop)
@@ -49,7 +51,7 @@ func TestPeerKeepalivePingsEveryPeer(t *testing.T) {
 
 func TestPeerKeepaliveStops(t *testing.T) {
 	d := &kaDoer{}
-	s := &Server{peerDoer: d, peers: staticPeers{list: []string{"https://a:8000"}}}
+	s := &Server{peer: peerEngine{doer: d, peers: staticPeers{list: []string{"https://a:8000"}}}}
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() { s.startPeerKeepalive(time.Millisecond, stop); close(done) }()

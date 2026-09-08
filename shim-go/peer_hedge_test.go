@@ -67,17 +67,19 @@ func newHedgeServer(d *hedgeDoer, timer chan time.Time) *Server {
 	return &Server{
 		metrics:          NewMetrics(),
 		doer:             d,
-		peerDoer:         d,
 		signed:           NewTTLMap(3600e9, 100, nil),
 		signedCandidates: 8,
-		peers:            staticPeers{list: []string{"https://b:8000"}},
-		sticky:           newStickyPeer(time.Minute, nil),
-		peerStats:        newPeerStats(),
-		hedgeFactor:      1.5,
-		hedgeMinMs:       50,
-		hedgeMaxMs:       1000,
-		peerFetchTimeout: 5 * time.Second,
-		hedgeAfter:       func(time.Duration) <-chan time.Time { return timer },
+		peer: peerEngine{
+			doer:         d,
+			peers:        staticPeers{list: []string{"https://b:8000"}},
+			sticky:       newStickyPeer(time.Minute, nil),
+			stats:        newPeerStats(),
+			hedgeFactor:  1.5,
+			hedgeMinMs:   50,
+			hedgeMaxMs:   1000,
+			fetchTimeout: 5 * time.Second,
+			hedgeAfter:   func(time.Duration) <-chan time.Time { return timer },
+		},
 	}
 }
 
@@ -198,7 +200,7 @@ func TestRacePeerWinsBooksActualCDNWaste(t *testing.T) {
 	d := &partialCDNDoer{peerRelease: peerRel, body: "BYTES"}
 	s := newHedgeServer(&hedgeDoer{}, timer) // placeholder, doer replaced below
 	s.doer = d
-	s.peerDoer = d
+	s.peer.doer = d
 	s.signed.Set("h", []string{"http://cdn/x"})
 
 	res, src, ok := s.raceOnePeer(context.Background(), "https://b:8000", "h", "bytes=0-4")

@@ -140,18 +140,20 @@ func main() {
 		metrics:          metrics,
 		lru:              lru,
 		doer:             client,
-		peerDoer:         peerClient,
 		signedCandidates: envInt("SIGNED_CANDIDATES_PER_XORB", 8),
 		sem:              sem,
 		authToken:        env("SHIM_AUTH_TOKEN", ""),
-		peers:            peers,
-		sticky:           newStickyPeer(stickyTTL, nil),
-		peerProbeTimeout: probeTimeout,
-		peerFetchTimeout: fetchTimeout,
-		peerStats:        newPeerStats(),
-		hedgeFactor:      envFloat("PEER_HEDGE_FACTOR", 1.5),
-		hedgeMinMs:       envInt("PEER_HEDGE_MIN_MS", 50),
-		hedgeMaxMs:       envInt("PEER_HEDGE_MAX_MS", 1000),
+		peer: peerEngine{
+			doer:         peerClient,
+			peers:        peers,
+			sticky:       newStickyPeer(stickyTTL, nil),
+			probeTimeout: probeTimeout,
+			fetchTimeout: fetchTimeout,
+			stats:        newPeerStats(),
+			hedgeFactor:  envFloat("PEER_HEDGE_FACTOR", 1.5),
+			hedgeMinMs:   envInt("PEER_HEDGE_MIN_MS", 50),
+			hedgeMaxMs:   envInt("PEER_HEDGE_MAX_MS", 1000),
+		},
 	}
 	seedLRU(s)
 
@@ -168,8 +170,8 @@ func main() {
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		snap := s.metrics.Snapshot()
 		snap["signed_urls_tracked"] = s.signed.Len()
-		if s.peerStats != nil {
-			snap["peer_throughput_bytes_per_ms"] = s.peerStats.fleetThroughput()
+		if s.peer.stats != nil {
+			snap["peer_throughput_bytes_per_ms"] = s.peer.stats.fleetThroughput()
 		}
 		writeJSON(w, http.StatusOK, snap)
 	})
@@ -192,7 +194,7 @@ func main() {
 		"max_gib", maxGiB, "min_free_pct", minFreePct, "min_free_bytes", minFree,
 		"max_inflight_fetches", cap(sem), "auth", s.authToken != "",
 		"peers", len(peerList), "peer_max_idle_conns", peerTransport.MaxIdleConnsPerHost,
-		"hedge_factor", s.hedgeFactor, "hedge_max_ms", s.hedgeMaxMs)
+		"hedge_factor", s.peer.hedgeFactor, "hedge_max_ms", s.peer.hedgeMaxMs)
 	srv := &http.Server{Addr: "0.0.0.0:" + port, Handler: handler}
 
 	// Serve in the background; the main goroutine waits for a termination signal

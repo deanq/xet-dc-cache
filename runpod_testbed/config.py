@@ -36,6 +36,8 @@ def load_str(text: str) -> Config:
         raise ValueError(f"burst {cfg.burst} exceeds max_burst {cfg.max_burst}")
     if len(cfg.overlap) > cfg.max_pods:
         raise ValueError(f"overlap groups {len(cfg.overlap)} exceed max_pods {cfg.max_pods}")
+    if set(cfg.overlap) != {"A", "B", "C"}:
+        raise ValueError(f"overlap groups must be exactly A,B,C (got {sorted(cfg.overlap)})")
     known = set(cfg.models)
     for grp, ms in cfg.overlap.items():
         for m in ms:

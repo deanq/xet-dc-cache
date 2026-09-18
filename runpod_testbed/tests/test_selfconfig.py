@@ -1,5 +1,8 @@
+import os
+
 import pytest
 
+from runpod_testbed.provision import selfconfig
 from runpod_testbed.provision.selfconfig import (
     NotReady,
     assemble_env,
@@ -54,3 +57,44 @@ def test_expected_fleet_size_raises_when_zero():
 def test_expected_fleet_size_raises_when_not_an_integer():
     with pytest.raises(NotReady):
         expected_fleet_size({"FLEET_SIZE": "abc"})
+
+
+class _FakeFleet:
+    """Stand-in for provision.fleet.Fleet: single-pod fleet, always ready."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def list_pods_by_prefix(self, prefix):
+        return [{"id": "self-id", "name": "cache-0"}]
+
+    def get_pod_ports(self, pod_id):
+        return [
+            {"type": "tcp", "isIpPublic": True, "privatePort": 8000,
+             "ip": "1.2.3.4", "publicPort": 41001}
+        ]
+
+
+def test_main_execs_xetcache_without_nameerror(monkeypatch):
+    """Regression test for the `own_id` NameError in main(): a one-pod fleet
+    should sail through the readiness loop and reach os.execvp("xetcache", ...)
+    -- proving main() no longer references an undefined `own_id`.
+    """
+    monkeypatch.setenv("RUNPOD_POD_ID", "self-id")
+    monkeypatch.setenv("FLEET_PREFIX", "cache-")
+    monkeypatch.setenv("FLEET_SIZE", "1")
+    monkeypatch.setenv("RUNPOD_API_KEY", "fake-key")
+    monkeypatch.setattr(selfconfig, "Fleet", _FakeFleet)
+
+    exec_calls = []
+
+    def fake_execvp(file, args):
+        exec_calls.append((file, args))
+
+    monkeypatch.setattr(selfconfig.os, "execvp", fake_execvp)
+
+    selfconfig.main()
+
+    assert exec_calls == [("xetcache", ["xetcache"])]
+    assert os.environ["PUBLIC_BASE"] == "http://1.2.3.4:41001"
+    assert os.environ["PEERS"] == ""

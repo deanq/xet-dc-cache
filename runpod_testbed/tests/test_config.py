@@ -34,3 +34,14 @@ def test_rejects_overlap_model_not_in_models():
     bad = VALID.replace('C = ["org/z@main", "org/x@main"]', 'C = ["org/z@main", "org/UNKNOWN@main"]')
     with pytest.raises(ValueError, match="UNKNOWN"):
         load_str(bad)
+
+
+def test_overlap_must_be_exactly_a_b_c():
+    bad = VALID.replace('C = ["org/z@main", "org/x@main"]\n', "")
+    with pytest.raises(ValueError, match="A,B,C"):
+        load_str(bad)
+
+
+def test_overlap_a_b_c_still_loads():
+    cfg = load_str(VALID)
+    assert set(cfg.overlap) == {"A", "B", "C"}

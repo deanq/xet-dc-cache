@@ -36,6 +36,9 @@ def _final_by_pod(rows, name):
 def peering_payoff(metric_rows: list) -> dict:
     peer = _final_by_pod(metric_rows, "xet_peer_bytes_total")
     wan = _final_by_pod(metric_rows, "xet_wan_bytes_total")
+    # Metric names confirmed against shim-go/prometheus.go (lines 33/35) -- the
+    # graceful 0.0 fallback below is for "no hedges fired yet", not an unverified
+    # metric-name guess.
     fired = _final_by_pod(metric_rows, "xet_peer_hedge_fired_total")
     won = _final_by_pod(metric_rows, "xet_peer_hedge_peer_won_total")
     total = peer + wan

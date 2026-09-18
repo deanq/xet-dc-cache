@@ -20,6 +20,9 @@ def _mk(name: str, pod_addr: str):
     return _fn
 
 # up.py exports POD_ADDR_A/B/C before `flash deploy`; groups map A/B/C -> pods.
+# The A/B/C set (exactly three groups) is enforced in config.load (load_str) --
+# a non-{A,B,C} overlap config raises ValueError there before any pod is
+# provisioned, so this module can assume POD_ADDR_A/B/C always exist.
 download_A = _mk("xet-dl-A", os.environ["POD_ADDR_A"])
 download_B = _mk("xet-dl-B", os.environ["POD_ADDR_B"])
 download_C = _mk("xet-dl-C", os.environ["POD_ADDR_C"])

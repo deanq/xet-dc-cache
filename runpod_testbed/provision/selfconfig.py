@@ -71,7 +71,7 @@ def expected_fleet_size(env: dict) -> int:
 
 
 def main() -> None:
-    own = os.environ["RUNPOD_POD_ID"]
+    own_id = os.environ["RUNPOD_POD_ID"]
     prefix = os.environ["FLEET_PREFIX"]
     token = os.environ.get("SHIM_AUTH_TOKEN", "")
     extra = {
@@ -92,8 +92,8 @@ def main() -> None:
             raise NotReady(f"fleet prefix {prefix!r} never reached expected size")
         time.sleep(3)
 
-    peers = discover_ids(pods, own)
-    env = resolve(fleet, own, peers, timeout_s=300, token=token, extra=extra)
+    peers = discover_ids(pods, own_id)
+    env = resolve(fleet, own_id, peers, timeout_s=300, token=token, extra=extra)
     os.environ.update(env)
     print(f"[selfconfig] PUBLIC_BASE={env['PUBLIC_BASE']} PEERS={env['PEERS']}", flush=True)
     os.execvp("xetcache", ["xetcache"])

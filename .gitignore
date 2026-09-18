@@ -13,3 +13,11 @@ xet_verify/target/
 # Go build output
 shim-go/xetcache
 xetcache-linux-amd64
+
+# Runpod testbed: run state, secrets, local Flash packaging cache
+runpod_testbed/data/
+runpod_testbed/config.toml
+runpod_testbed/worker/.flash/
+
+# Flash CLI local state (created wherever `flash deploy` is invoked from)
+.flash/

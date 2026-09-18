@@ -1,0 +1,33 @@
+# HELP xet_hits_total Xorb range requests served from the local cache.
+# TYPE xet_hits_total counter
+xet_hits_total 12
+# HELP xet_misses_total Xorb range requests that required an upstream fetch.
+# TYPE xet_misses_total counter
+xet_misses_total 4
+# HELP xet_wan_bytes_total Bytes fetched from upstream (WAN).
+# TYPE xet_wan_bytes_total counter
+xet_wan_bytes_total 1.048576e+06
+# HELP xet_peer_bytes_total Bytes pulled from peers (WAN/CDN transfer displaced).
+# TYPE xet_peer_bytes_total counter
+xet_peer_bytes_total 524288
+# HELP xet_effective_hit_rate (hits + peer_hits) / (hits + misses): share of requests served without a CDN fetch.
+# TYPE xet_effective_hit_rate gauge
+xet_effective_hit_rate 0.75
+# HELP xet_peer_throughput_bytes_per_ms Fleet-aggregate peer throughput EWMA (bytes/ms), used to size the hedge delay.
+# TYPE xet_peer_throughput_bytes_per_ms gauge
+xet_peer_throughput_bytes_per_ms 2.1
+# HELP xet_peer_peer_throughput_bytes_per_ms Per-peer throughput EWMA (bytes/ms).
+# TYPE xet_peer_peer_throughput_bytes_per_ms gauge
+xet_peer_peer_throughput_bytes_per_ms{peer="http://a:8000"} 1.2
+xet_peer_peer_throughput_bytes_per_ms{peer="http://b:8000"} 3.5
+# HELP xet_xorb_latency_ms Served-range latency by source (hit|peer|cdn), milliseconds.
+# TYPE xet_xorb_latency_ms histogram
+xet_xorb_latency_ms_bucket{source="cdn",le="5"} 3
+xet_xorb_latency_ms_bucket{source="cdn",le="25"} 7
+xet_xorb_latency_ms_bucket{source="cdn",le="+Inf"} 8
+xet_xorb_latency_ms_sum{source="cdn"} 96.5
+xet_xorb_latency_ms_count{source="cdn"} 8
+xet_xorb_latency_ms_bucket{source="peer",le="5"} 2
+xet_xorb_latency_ms_bucket{source="peer",le="+Inf"} 2
+xet_xorb_latency_ms_sum{source="peer"} 6.4
+xet_xorb_latency_ms_count{source="peer"} 2

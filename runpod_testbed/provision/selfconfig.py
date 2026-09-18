@@ -50,6 +50,26 @@ def discover_ids(list_result: list[dict], own_id: str) -> list[str]:
     return [pod["id"] for pod in list_result if pod["id"] != own_id]
 
 
+def expected_fleet_size(env: dict) -> int:
+    """Pure: read FLEET_SIZE from env, fail loudly rather than degrade quietly.
+
+    FLEET_SIZE is the safeguard against main() resolving a partial PEERS list
+    (e.g. a fast-booting pod discovering only 1 of 3 siblings because the
+    other two pods don't exist in the fleet-prefix listing yet) -- so it must
+    be required and strictly a positive integer, not silently defaulted.
+    """
+    raw = env.get("FLEET_SIZE")
+    if raw is None:
+        raise NotReady("FLEET_SIZE must be set to the pod count")
+    try:
+        size = int(raw)
+    except ValueError:
+        raise NotReady(f"FLEET_SIZE must be an integer, got {raw!r}") from None
+    if size <= 0:
+        raise NotReady(f"FLEET_SIZE must be a positive integer, got {raw!r}")
+    return size
+
+
 def main() -> None:
     own = os.environ["RUNPOD_POD_ID"]
     prefix = os.environ["FLEET_PREFIX"]
@@ -61,14 +81,12 @@ def main() -> None:
     }
 
     fleet = Fleet()
+    expected = expected_fleet_size(os.environ)
 
-    expected = int(os.environ.get("FLEET_SIZE", "0")) or None
     deadline = time.time() + 300
     while True:
         pods = fleet.list_pods_by_prefix(prefix)
-        if any(p["id"] == own_id for p in pods) and (
-            expected is None or len(pods) >= expected
-        ):
+        if any(p["id"] == own_id for p in pods) and len(pods) >= expected:
             break
         if time.time() > deadline:
             raise NotReady(f"fleet prefix {prefix!r} never reached expected size")

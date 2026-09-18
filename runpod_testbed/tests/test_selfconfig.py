@@ -1,6 +1,11 @@
 import pytest
 
-from runpod_testbed.provision.selfconfig import NotReady, assemble_env, discover_ids
+from runpod_testbed.provision.selfconfig import (
+    NotReady,
+    assemble_env,
+    discover_ids,
+    expected_fleet_size,
+)
 
 
 def test_assemble_builds_public_base_and_peers():
@@ -30,3 +35,22 @@ def test_assemble_raises_when_peer_missing():
 def test_discover_ids_excludes_own_id():
     pods = [{"id": "self", "name": "cache-0"}, {"id": "b", "name": "cache-1"}, {"id": "c", "name": "cache-2"}]
     assert set(discover_ids(pods, "self")) == {"b", "c"}
+
+
+def test_expected_fleet_size_returns_int():
+    assert expected_fleet_size({"FLEET_SIZE": "3"}) == 3
+
+
+def test_expected_fleet_size_raises_when_unset():
+    with pytest.raises(NotReady):
+        expected_fleet_size({})
+
+
+def test_expected_fleet_size_raises_when_zero():
+    with pytest.raises(NotReady):
+        expected_fleet_size({"FLEET_SIZE": "0"})
+
+
+def test_expected_fleet_size_raises_when_not_an_integer():
+    with pytest.raises(NotReady):
+        expected_fleet_size({"FLEET_SIZE": "abc"})

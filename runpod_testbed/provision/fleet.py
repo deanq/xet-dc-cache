@@ -49,3 +49,21 @@ class Fleet:
 
     def terminate_pod(self, pod_id: str) -> None:
         self._runpod.terminate_pod(pod_id)
+
+    def list_pods_by_prefix(self, prefix: str) -> list[dict]:
+        # Query shape confirmed 2026-09-18 against docs.runpod.io/sdks/graphql
+        # (Manage Pods page): `query { myself { pods { id name ... } } }` is the
+        # documented shape for listing all pods on the account -- there is no
+        # server-side name filter, so we list everything and filter in Python.
+        # Not independently verified against a live account/API key in this
+        # task; confirm against the live API in Task 8 and treat an empty/
+        # differently-shaped `myself.pods` as "query shape changed", not
+        # "no pods exist".
+        q = "query { myself { pods { id name } } }"
+        data = _graphql(q, self.api_key)
+        pods = ((data.get("data", {}).get("myself") or {}).get("pods")) or []
+        return [
+            {"id": p["id"], "name": p["name"]}
+            for p in pods
+            if p.get("name", "").startswith(prefix)
+        ]

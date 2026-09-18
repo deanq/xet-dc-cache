@@ -1,0 +1,29 @@
+# Runpod cache-testbed configuration (example). Copy to config.toml and fill
+# in real values -- do not commit config.toml (it may carry account-specific
+# registry paths).
+
+dc = "EU-RO-1"                              # Runpod datacenter id to pin pods to
+registry = "docker.io/CHANGEME"             # your container registry
+cache_image = "CHANGEME/xet-cache-testbed:latest"  # image running the cache shim
+worker_cpu = "cpu5c-4-8"                    # Flash worker instance flavor
+worker_deps = ["huggingface_hub", "hf_xet"] # pip deps installed on the worker
+container_disk_gb = 60
+scrape_interval_s = 5
+
+# Models under test (org/name@revision). Replace with real HF repo ids, e.g.:
+#   "meta-llama/Llama-3.1-8B@main"
+#   "mistralai/Mistral-7B-v0.1@main"
+models = ["org/CHANGEME-a@main", "org/CHANGEME-b@main", "org/CHANGEME-c@main"]
+
+burst = 4
+max_pods = 3
+max_burst = 8
+pod_instance_id = "cpu3c-2-4"
+
+# Overlap groups: each key is a pod label, value is the subset of `models`
+# (above) that pod should warm. Every model referenced here must appear in
+# `models`, and the number of groups must not exceed `max_pods`.
+[overlap]
+A = ["org/CHANGEME-a@main", "org/CHANGEME-b@main"]
+B = ["org/CHANGEME-b@main", "org/CHANGEME-c@main"]
+C = ["org/CHANGEME-c@main", "org/CHANGEME-a@main"]

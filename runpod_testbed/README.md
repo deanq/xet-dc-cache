@@ -15,8 +15,9 @@ as `runpod-testbed`.
 - `RUNPOD_API_KEY` with permission to create pods and deploy Flash endpoints.
 - A throwaway/scoped `HF_TOKEN` — see the plaintext-token warning below.
 - A container registry you can push to (for the cache-pod image only).
-- `pip install runpod-flash` (provides the `flash` CLI and `runpod` Python
-  client used by `drive/run.py`).
+- `uv tool install runpod-flash` (puts the `flash` CLI on `PATH`). The
+  `runpod` Python client used by the scripts is pulled per-invocation via
+  `uv run --with runpod ...` below — no global install.
 - Go toolchain for `make build-linux` (repo root `Makefile`).
 
 ## COST WARNING
@@ -97,8 +98,8 @@ The **worker side needs no image at all** — Flash packages
 ### 3. Install and authenticate the Flash CLI
 
 ```bash
-pip install runpod-flash
-flash login            # or: export RUNPOD_API_KEY=...
+uv tool install runpod-flash   # installs the `flash` CLI onto PATH
+flash login                    # or: export RUNPOD_API_KEY=...
 ```
 
 ### 4. Configure the run
@@ -121,7 +122,7 @@ export SHIM_AUTH_TOKEN=...   # arbitrary bearer secret for the peer channel
 ### 6. Provision the fleet
 
 ```bash
-uv run runpod_testbed/provision/up.py runpod_testbed/config.toml
+uv run --with runpod runpod_testbed/provision/up.py runpod_testbed/config.toml
 ```
 
 Creates 3 EU-RO-1 CPU pods (one per overlap group), waits for each to
@@ -136,7 +137,8 @@ tears itself down and re-raises.
 ### 7. Validate wiring with a dry run
 
 ```bash
-uv run runpod_testbed/drive/run.py --dry-run http://<pod-addr>:8000 dryrun
+uv run --with huggingface_hub --with hf_xet \
+  runpod_testbed/drive/run.py --dry-run http://<pod-addr>:8000 dryrun
 ```
 
 Downloads `config.toml`'s `models` directly against one cache pod's public
@@ -148,17 +150,20 @@ unused on that code path) — pass any placeholder such as `dryrun`.
 ### 8. Start the metrics harvester (background)
 
 ```bash
-uv run runpod_testbed/harvest/scrape.py data/state-<runid>.json 5 &
+uv run --with runpod --with pyarrow \
+  runpod_testbed/harvest/scrape.py data/state-<runid>.json &
 ```
 
-Polls each pod's `/metrics/prometheus` every 5s (second arg, default 5)
-and appends to `data/pod-metrics-<runid>.parquet`. Leave it running for the
-duration of step 9; kill it (or let it keep running harmlessly) afterward.
+Polls each pod's `/metrics/prometheus` on the interval from
+`config.toml`'s `scrape_interval_s` (overridable by an optional second CLI
+arg) and appends to `data/pod-metrics-<runid>.parquet`. Leave it running for
+the duration of step 9; kill it (or let it keep running harmlessly)
+afterward.
 
 ### 9. Drive the workload
 
 ```bash
-uv run runpod_testbed/drive/run.py runpod_testbed/config.toml <runid>
+uv run --with runpod runpod_testbed/drive/run.py runpod_testbed/config.toml <runid>
 ```
 
 Expands `config.toml`'s `overlap` matrix into cold (one download per
@@ -170,7 +175,7 @@ below), and appends per-job timing rows to `data/jobs-<runid>.jsonl`.
 ### 10. Generate the report
 
 ```bash
-uv run runpod_testbed/harvest/report.py <runid>
+uv run --with pyarrow --with matplotlib runpod_testbed/harvest/report.py <runid>
 ```
 
 Reads `data/jobs-<runid>.jsonl` + `data/pod-metrics-<runid>.parquet` and
@@ -179,7 +184,7 @@ produces latency-by-phase and peering-payoff summaries.
 ### 11. Tear down
 
 ```bash
-uv run runpod_testbed/provision/down.py data/state-<runid>.json
+uv run --with runpod runpod_testbed/provision/down.py data/state-<runid>.json
 ```
 
 `flash undeploy`s the endpoints and terminates all pods, tolerating errors
@@ -216,9 +221,11 @@ without a live Runpod/Flash account. Each has a named fallback if wrong.
 4. **`flash deploy` cwd.** `up.py` runs `flash deploy --env <flash_env>`
    with `cwd="runpod_testbed/worker"`, i.e. repo-root-relative. Confirm the
    Flash CLI's packaging step picks up `worker/flash_app.py` and
-   `worker/timing.py` correctly from that cwd, and that `pip install
-   runpod-flash` put a `flash` binary on `PATH` for the environment `up.py`
-   inherits (it passes through `os.environ` plus the deploy env).
+   `worker/timing.py` correctly from that cwd, and that
+   `uv tool install runpod-flash` put a `flash` binary on `PATH` for the
+   environment `up.py` inherits (it passes through `os.environ` plus the
+   deploy env). If `flash` isn't found, run `uv tool update-shell` or add
+   `~/.local/bin` to `PATH`.
 
 ## Validated run
 

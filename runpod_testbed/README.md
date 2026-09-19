@@ -97,6 +97,10 @@ declared deps directly from source at `flash deploy` time.
 
 ### 3. Install and authenticate the Flash CLI
 
+`make -C runpod_testbed setup` does the mechanical parts of steps 3–4 for
+you (installs the `flash` CLI if missing, scaffolds `config.toml`), then
+prints the manual steps below. Or do it by hand:
+
 ```bash
 uv tool install runpod-flash   # installs the `flash` CLI onto PATH
 flash login                    # authenticates the flash CLI with Runpod

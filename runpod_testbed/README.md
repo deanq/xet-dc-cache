@@ -85,22 +85,30 @@ repo root; keep both in sync if the Makefile output path ever changes.
 ### 2. Build and push the cache-pod image
 
 ```bash
-docker build -f runpod_testbed/provision/cache.Dockerfile \
-    -t <registry>/xet-cache-testbed:latest .
+make -C runpod_testbed image IMAGE=<registry>/xet-cache-testbed:latest
 docker push <registry>/xet-cache-testbed:latest
 ```
 
-Run from the repo root (the Dockerfile's `COPY` paths are root-relative).
-The **worker side needs no image at all** — Flash packages
-`worker/flash_app.py` and its declared deps directly from source at
-`flash deploy` time.
+`make image` runs `build-linux` (step 1) then `docker build` for
+`linux/amd64` from the repo root — so step 1 is optional when you use it.
+Set `IMAGE` to match your `config.toml` `cache_image`. The **worker side
+needs no image at all** — Flash packages `worker/flash_app.py` and its
+declared deps directly from source at `flash deploy` time.
 
 ### 3. Install and authenticate the Flash CLI
 
 ```bash
 uv tool install runpod-flash   # installs the `flash` CLI onto PATH
-flash login                    # or: export RUNPOD_API_KEY=...
+flash login                    # authenticates the flash CLI with Runpod
 ```
+
+`flash login` handles the **flash CLI's** Runpod credential for you (it's
+what `up.py` shells out to for `flash deploy`). It does **not** cover the
+`runpod-python` SDK path — `up.py`/`down.py`/`scrape.py` construct a
+`Fleet()` that reads `RUNPOD_API_KEY` from the environment (step 5), and
+that key is also injected into each pod so its self-config can resolve peer
+addresses. So `flash login` + `RUNPOD_API_KEY` in the env cover the two
+halves; you don't configure the key for the CLI twice.
 
 ### 4. Configure the run
 
@@ -114,15 +122,18 @@ $EDITOR runpod_testbed/config.toml   # fill in registry, cache_image, models, ov
 ### 5. Export secrets
 
 ```bash
-export RUNPOD_API_KEY=...
+export RUNPOD_API_KEY=...    # for the runpod-python SDK (Fleet) + injected into pods
 export HF_TOKEN=...          # throwaway/scoped — see warning above
 export SHIM_AUTH_TOKEN=...   # arbitrary bearer secret for the peer channel
 ```
 
+(`flash login` in step 3 already handled the flash CLI's copy of the key —
+`RUNPOD_API_KEY` here is for the SDK-driven provisioning/teardown/scrape.)
+
 ### 6. Provision the fleet
 
 ```bash
-uv run --with runpod runpod_testbed/provision/up.py runpod_testbed/config.toml
+make -C runpod_testbed up
 ```
 
 Creates 3 EU-RO-1 CPU pods (one per overlap group), waits for each to
@@ -137,21 +148,19 @@ tears itself down and re-raises.
 ### 7. Validate wiring with a dry run
 
 ```bash
-uv run --with huggingface_hub --with hf_xet \
-  runpod_testbed/drive/run.py --dry-run http://<pod-addr>:8000 dryrun
+make -C runpod_testbed dry-run CACHE_URL=http://<pod-addr>:8000
 ```
 
 Downloads `config.toml`'s `models` directly against one cache pod's public
 address (bypassing Flash entirely) to confirm the shim is reachable and
-serving before spending Flash invocations. Note: `run.py`'s `runid`
-positional is required by its argparse even in `--dry-run` mode (it is
-unused on that code path) — pass any placeholder such as `dryrun`.
+serving before spending Flash invocations. (The target passes the `dryrun`
+placeholder for `run.py`'s otherwise-required `runid` positional, which is
+unused on the `--dry-run` path.)
 
 ### 8. Start the metrics harvester (background)
 
 ```bash
-uv run --with runpod --with pyarrow \
-  runpod_testbed/harvest/scrape.py data/state-<runid>.json &
+make -C runpod_testbed scrape RUNID=<runid> &
 ```
 
 Polls each pod's `/metrics/prometheus` on the interval from
@@ -163,7 +172,7 @@ afterward.
 ### 9. Drive the workload
 
 ```bash
-uv run --with runpod runpod_testbed/drive/run.py runpod_testbed/config.toml <runid>
+make -C runpod_testbed drive RUNID=<runid>
 ```
 
 Expands `config.toml`'s `overlap` matrix into cold (one download per
@@ -175,7 +184,7 @@ below), and appends per-job timing rows to `data/jobs-<runid>.jsonl`.
 ### 10. Generate the report
 
 ```bash
-uv run --with pyarrow --with matplotlib runpod_testbed/harvest/report.py <runid>
+make -C runpod_testbed report RUNID=<runid>
 ```
 
 Reads `data/jobs-<runid>.jsonl` + `data/pod-metrics-<runid>.parquet` and
@@ -184,7 +193,7 @@ produces latency-by-phase and peering-payoff summaries.
 ### 11. Tear down
 
 ```bash
-uv run --with runpod runpod_testbed/provision/down.py data/state-<runid>.json
+make -C runpod_testbed down RUNID=<runid>
 ```
 
 `flash undeploy`s the endpoints and terminates all pods, tolerating errors
@@ -249,3 +258,33 @@ measurements, an operator should run the recipe above once with
 
 Once confirmed, replace this section with the actual runid, timings, and
 any corrections made to the known-unknowns above.
+
+## Appendix: raw commands (what the Makefile targets run)
+
+The steps above use `make -C runpod_testbed <target>` (see
+`runpod_testbed/Makefile`, or `make -C runpod_testbed help`). Every recipe
+`cd`s to the repo root first and declares its deps with `uv run --with …`.
+If you'd rather run them directly, these are the equivalents (all from the
+repo root):
+
+```bash
+# test
+uv run --with pytest pytest runpod_testbed/tests -v
+# image        (build-linux first: it drops xetcache-linux-amd64 at repo root)
+make build-linux && docker build --platform linux/amd64 \
+  -f runpod_testbed/provision/cache.Dockerfile -t <registry>/xet-cache-testbed:latest .
+# up
+uv run --with runpod runpod_testbed/provision/up.py runpod_testbed/config.toml
+# dry-run
+uv run --with huggingface_hub --with hf_xet \
+  runpod_testbed/drive/run.py --dry-run http://<pod-addr>:8000 dryrun
+# scrape
+uv run --with runpod --with pyarrow \
+  runpod_testbed/harvest/scrape.py data/state-<runid>.json
+# drive
+uv run --with runpod runpod_testbed/drive/run.py runpod_testbed/config.toml <runid>
+# report
+uv run --with pyarrow --with matplotlib runpod_testbed/harvest/report.py <runid>
+# down
+uv run --with runpod runpod_testbed/provision/down.py data/state-<runid>.json
+```

@@ -25,6 +25,16 @@ def test_load_ok():
     assert cfg.burst == 4
     assert cfg.overlap["A"] == ["org/x@main", "org/y@main"]
 
+def test_rejects_changeme_image_placeholder():
+    bad = VALID.replace("me/xet-cache-testbed:latest", "CHANGEME/xet-cache-testbed:latest")
+    with pytest.raises(ValueError, match="placeholder"):
+        load_str(bad)
+
+def test_rejects_changeme_model_placeholder():
+    bad = VALID.replace("org/x@main", "org/CHANGEME-a@main")
+    with pytest.raises(ValueError, match="placeholder"):
+        load_str(bad)
+
 def test_rejects_burst_over_ceiling():
     bad = VALID.replace("burst = 4", "burst = 99")
     with pytest.raises(ValueError, match="burst"):

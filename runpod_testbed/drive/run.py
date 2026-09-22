@@ -36,10 +36,11 @@ def expand_jobs(overlap: dict, burst: int) -> list:
 
 
 def endpoint_ids(manifest: dict) -> dict:
+    # Flash writes {"resources": {"xet-dl-A": {..., "endpoint_id": "..."}}}.
+    # Key each endpoint by the trailing group letter (xet-dl-A -> "A").
     out = {}
-    for e in manifest.get("endpoints", []):
-        fn = e["function"]                      # "xet-dl-A"
-        out[fn.rsplit("-", 1)[-1]] = e["endpoint_id"]
+    for res_name, res in manifest.get("resources", {}).items():
+        out[res_name.rsplit("-", 1)[-1]] = res["endpoint_id"]
     return out
 
 

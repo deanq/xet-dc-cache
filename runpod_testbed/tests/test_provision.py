@@ -1,5 +1,5 @@
 from runpod_testbed.provision.up import flash_deploy_env, State
-from runpod_testbed.provision.down import teardown
+from runpod_testbed.provision.down import teardown, cli_undeploy, ENDPOINTS
 
 def _cfg():
     from runpod_testbed.config import Config
@@ -46,3 +46,19 @@ def test_teardown_tolerates_flash_undeploy_error():
     def boom(env): raise RuntimeError("flash cli missing")
     errored = teardown(f, State("r", ["pA"], "r-env"), flash_undeploy=boom)
     assert "r-env" in errored and f.calls == [("pod", "pA")]  # pods still torn down
+
+def test_cli_undeploy_removes_each_endpoint_by_name_without_env(monkeypatch):
+    import runpod_testbed.provision.down as down
+    calls = []
+    monkeypatch.setattr(down.subprocess, "run",
+                        lambda argv, **kw: calls.append((argv, kw)))
+    cli_undeploy("ignored-env")
+    assert [c[0] for c in calls] == [
+        ["flash", "undeploy", name, "--force"] for name in ENDPOINTS
+    ]
+    # flash undeploy has no --env, and --all is unsafe (nukes unrelated endpoints)
+    for argv, kw in calls:
+        assert "--env" not in argv and "--all" not in argv
+        assert kw.get("check") is False  # tolerate not-found
+        # must run from the worker dir or flash reports "no endpoints found"
+        assert kw.get("cwd") == "runpod_testbed/worker"

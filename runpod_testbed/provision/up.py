@@ -41,7 +41,10 @@ def _wait_addr(fleet, pid, timeout_s):
         if a:
             return a
         time.sleep(3)
-    raise TimeoutError(f"pod {pid} never exposed a public tcp addr")
+    raise TimeoutError(
+        f"pod {pid} never exposed a public tcp addr (usual cause: the image "
+        f"failed to pull or the shim never started — check the pod's status/logs "
+        f"in the Runpod console and confirm cache_image is pushed and reachable)")
 
 
 def _wait_healthz(addr, timeout_s):

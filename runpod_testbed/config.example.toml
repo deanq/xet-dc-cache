@@ -7,7 +7,7 @@ registry = "docker.io/CHANGEME"             # your container registry
 cache_image = "CHANGEME/xet-cache-testbed:latest"  # image running the cache shim
 worker_cpu = "cpu5c-4-8"                    # Flash worker instance flavor
 worker_deps = ["huggingface_hub", "hf_xet"] # Python deps Flash installs on the worker
-container_disk_gb = 60
+container_disk_gb = 20   # CPU pods cap container disk at 20 GB; larger caches need a network volume
 scrape_interval_s = 5
 
 # Models under test (org/name@revision). Replace with real HF repo ids, e.g.:

@@ -12,9 +12,10 @@ def test_expand_cold_then_warm():
     assert {j["group"] for j in jobs} == {"A", "B"}
 
 def test_endpoint_ids_maps_group_to_id():
-    # shape per Task-3/5 verification of flash_manifest.json
-    manifest = {"endpoints": [
-        {"function": "xet-dl-A", "endpoint_id": "ep-a"},
-        {"function": "xet-dl-B", "endpoint_id": "ep-b"},
-    ]}
+    # Real flash_manifest.json shape (verified live 2026-09-22): a "resources"
+    # dict keyed by endpoint name, each carrying its endpoint_id.
+    manifest = {"resources": {
+        "xet-dl-A": {"functions": [{"name": "xet_dl_A"}], "endpoint_id": "ep-a"},
+        "xet-dl-B": {"functions": [{"name": "xet_dl_B"}], "endpoint_id": "ep-b"},
+    }}
     assert endpoint_ids(manifest) == {"A": "ep-a", "B": "ep-b"}

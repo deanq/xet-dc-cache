@@ -14,7 +14,9 @@ xet_verify/target/
 shim-go/xetcache
 xetcache-linux-amd64
 
-# Runpod testbed: run state, secrets, local Flash packaging cache
+# Runpod testbed: run state, secrets, local Flash packaging cache.
+# Scripts run from the repo root and write to ./data (not runpod_testbed/data).
+/data/
 runpod_testbed/data/
 runpod_testbed/config.toml
 runpod_testbed/.env

@@ -32,6 +32,16 @@ def load_str(text: str) -> Config:
     if missing:
         raise ValueError(f"config missing keys: {missing}")
     cfg = Config(**{k: raw[k] for k in _REQUIRED})
+    placeholders = [
+        f"{name}={val}"
+        for name, val in (("registry", cfg.registry), ("cache_image", cfg.cache_image))
+        if "CHANGEME" in val
+    ] + [f"models[{i}]={m}" for i, m in enumerate(cfg.models) if "CHANGEME" in m]
+    if placeholders:
+        raise ValueError(
+            "config still has example placeholders — edit config.toml before "
+            "provisioning (pods would pull a nonexistent image and time out): "
+            + ", ".join(placeholders))
     if cfg.burst > cfg.max_burst:
         raise ValueError(f"burst {cfg.burst} exceeds max_burst {cfg.max_burst}")
     if len(cfg.overlap) > cfg.max_pods:

@@ -51,7 +51,7 @@ def main() -> None:  # integration: loop scrape all pods -> parquet
     st = State.load(sys.argv[1])
     # Config is the source of truth for the scrape interval (scrape_interval_s);
     # sys.argv[2] remains as an optional one-off override.
-    cfg = config.load("config.toml")
+    cfg = config.load("runpod_testbed/config.toml")
     interval = int(sys.argv[2]) if len(sys.argv) > 2 else cfg.scrape_interval_s
     fleet = Fleet()
     addrs = {p: parse_external_addr(fleet.get_pod_ports(p)) for p in st.pods}

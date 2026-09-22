@@ -8,7 +8,7 @@
 # first real `create_cache_pod` call (Task 8's integration run) and treat a
 # capacity error there as "pin worked, DC lacks capacity" not "kwarg is wrong".
 from __future__ import annotations
-import json, os, urllib.request
+import os
 
 def parse_external_addr(ports: list[dict]) -> str | None:
     for p in ports or []:
@@ -16,14 +16,12 @@ def parse_external_addr(ports: list[dict]) -> str | None:
             return f"http://{p['ip']}:{p['publicPort']}"
     return None
 
-_GQL = "https://api.runpod.io/graphql"
-
 def _graphql(query: str, api_key: str) -> dict:
-    body = json.dumps({"query": query}).encode()
-    req = urllib.request.Request(f"{_GQL}?api_key={api_key}", data=body,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
+    # Delegate to the SDK so auth stays identical to create_pod/terminate_pod.
+    # The legacy `?api_key=` query param is rejected with HTTP 403; the SDK sends
+    # `Authorization: Bearer <key>`. Returns the parsed {"data": {...}} response.
+    from runpod.api.graphql import run_graphql_query
+    return run_graphql_query(query, api_key)
 
 class Fleet:
     def __init__(self, api_key: str | None = None):

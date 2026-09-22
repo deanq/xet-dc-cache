@@ -277,18 +277,20 @@ uv run --with pytest pytest runpod_testbed/tests -v
 # image        (build-linux first: it drops xetcache-linux-amd64 at repo root)
 make build-linux && docker build --platform linux/amd64 \
   -f runpod_testbed/provision/cache.Dockerfile -t <registry>/xet-cache-testbed:latest .
-# up
-uv run --with runpod runpod_testbed/provision/up.py runpod_testbed/config.toml
+# up   (run as a module so the repo root is on sys.path — a bare
+#       `uv run path/to/up.py` puts the script's dir on the path instead
+#       and `import runpod_testbed` fails)
+uv run --with runpod python -m runpod_testbed.provision.up runpod_testbed/config.toml
 # dry-run
 uv run --with huggingface_hub --with hf_xet \
-  runpod_testbed/drive/run.py --dry-run http://<pod-addr>:8000 dryrun
+  python -m runpod_testbed.drive.run --dry-run http://<pod-addr>:8000 dryrun
 # scrape
 uv run --with runpod --with pyarrow \
-  runpod_testbed/harvest/scrape.py data/state-<runid>.json
+  python -m runpod_testbed.harvest.scrape data/state-<runid>.json
 # drive
-uv run --with runpod runpod_testbed/drive/run.py runpod_testbed/config.toml <runid>
+uv run --with runpod python -m runpod_testbed.drive.run runpod_testbed/config.toml <runid>
 # report
-uv run --with pyarrow --with matplotlib runpod_testbed/harvest/report.py <runid>
+uv run --with pyarrow --with matplotlib python -m runpod_testbed.harvest.report <runid>
 # down
-uv run --with runpod runpod_testbed/provision/down.py data/state-<runid>.json
+uv run --with runpod python -m runpod_testbed.provision.down data/state-<runid>.json
 ```

@@ -24,9 +24,16 @@ SHELL := /bin/bash
 ROOT     := $(abspath $(CURDIR)/..)
 CONFIG   ?= runpod_testbed/config.toml
 CONFIG_EXAMPLE := runpod_testbed/config.example.toml
+ENV_FILE ?= $(CURDIR)/.env
 IMAGE    ?= xet-cache-testbed:latest
 STATE     = data/state-$(RUNID).json
 RUN      := uv run --with runpod
+
+# Source runpod_testbed/.env into the recipe shell. It holds the controller-side
+# secrets (RUNPOD_API_KEY, HF_TOKEN, SHIM_AUTH_TOKEN) — uv run does NOT read it.
+# Best-effort: absent file is fine (downstream validation fails loudly if a
+# required var is actually missing).
+LOADENV = { set -a; . "$(ENV_FILE)" 2>/dev/null || true; set +a; }
 
 .PHONY: help setup test image up dry-run scrape drive report down _needs-runid _needs-cacheurl
 
@@ -73,24 +80,24 @@ image:
 	@echo "built image $(IMAGE) — push it and set config.toml cache_image to match"
 
 up:
-	@cd $(ROOT) && $(RUN) runpod_testbed/provision/up.py $(CONFIG)
+	@cd $(ROOT) && $(LOADENV) && $(RUN) python -m runpod_testbed.provision.up $(CONFIG)
 
 dry-run: _needs-cacheurl
-	@cd $(ROOT) && uv run --with huggingface_hub --with hf_xet \
-		runpod_testbed/drive/run.py --dry-run $(CACHE_URL) dryrun
+	@cd $(ROOT) && $(LOADENV) && uv run --with huggingface_hub --with hf_xet \
+		python -m runpod_testbed.drive.run --dry-run $(CACHE_URL) dryrun
 
 scrape: _needs-runid
-	@cd $(ROOT) && $(RUN) --with pyarrow runpod_testbed/harvest/scrape.py $(STATE)
+	@cd $(ROOT) && $(LOADENV) && $(RUN) --with pyarrow python -m runpod_testbed.harvest.scrape $(STATE)
 
 drive: _needs-runid
-	@cd $(ROOT) && $(RUN) runpod_testbed/drive/run.py $(CONFIG) $(RUNID)
+	@cd $(ROOT) && $(LOADENV) && $(RUN) python -m runpod_testbed.drive.run $(CONFIG) $(RUNID)
 
 report: _needs-runid
 	@cd $(ROOT) && uv run --with pyarrow --with matplotlib \
-		runpod_testbed/harvest/report.py $(RUNID)
+		python -m runpod_testbed.harvest.report $(RUNID)
 
 down: _needs-runid
-	@cd $(ROOT) && $(RUN) runpod_testbed/provision/down.py $(STATE)
+	@cd $(ROOT) && $(LOADENV) && $(RUN) python -m runpod_testbed.provision.down $(STATE)
 
 _needs-runid:
 	@[ -n "$(RUNID)" ] || { echo "error: set RUNID=<timestamp printed by 'make up'>"; exit 1; }

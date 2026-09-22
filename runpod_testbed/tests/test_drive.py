@@ -2,7 +2,9 @@ import json
 import sys
 import types
 
-from runpod_testbed.drive.run import expand_jobs, endpoint_ids, _submit_and_wait
+from runpod_testbed.drive.run import (
+    expand_jobs, endpoint_ids, _submit_and_wait, start_jobs_file, record,
+)
 
 def test_expand_cold_then_warm():
     overlap = {"A": ["x", "y"], "B": ["y", "z"]}
@@ -73,3 +75,25 @@ def test_submit_and_wait_records_timeout_instead_of_crashing(tmp_path, monkeypat
     assert row["result"]["ok"] is False
     assert "timed out" in row["result"]["error"]
     assert row["result"]["status"] == "IN_QUEUE"
+
+
+def test_start_jobs_file_truncates_so_reruns_dont_double_count(tmp_path):
+    # Regression: record() appends, so a second drive pass on the same RUNID
+    # must not accumulate on top of the first pass's rows.
+    jobs_path = str(tmp_path / "jobs.jsonl")
+    job = {"group": "A", "model": "org/m@main", "phase": "cold", "replica": 0}
+    start_jobs_file(jobs_path)
+    record(job, {"ok": True}, 1.0, jobs_path)
+    record(job, {"ok": True}, 2.0, jobs_path)
+    assert len(open(jobs_path).read().splitlines()) == 2
+
+    # A fresh run resets the file rather than appending a third+fourth row.
+    start_jobs_file(jobs_path)
+    record(job, {"ok": True}, 3.0, jobs_path)
+    assert len(open(jobs_path).read().splitlines()) == 1
+
+
+def test_start_jobs_file_creates_missing_parent_dir(tmp_path):
+    jobs_path = str(tmp_path / "nested" / "jobs.jsonl")
+    start_jobs_file(jobs_path)
+    assert open(jobs_path).read() == ""

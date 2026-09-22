@@ -37,6 +37,17 @@ def endpoint_ids(manifest: dict) -> dict:
     return out
 
 
+def start_jobs_file(path: str) -> None:
+    """Truncate/create the per-run jobs file before recording into it.
+
+    record() appends, so without this a second drive pass on the same RUNID
+    would append to (and silently double-count) the previous pass's rows.
+    Reset to a clean file at the start of each run instead.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    open(path, "w").close()
+
+
 def record(job: dict, result: dict, submit_ts: float, path: str) -> None:
     row = {**job, "submit_ts": submit_ts, "return_ts": time.time(), "result": result}
     with open(path, "a") as fh:
@@ -95,6 +106,7 @@ def main(argv: list | None = None) -> None:
 
     os.makedirs("data", exist_ok=True)
     jobs_path = f"data/jobs-{args.runid}.jsonl"
+    start_jobs_file(jobs_path)  # fresh file so a re-run doesn't double-count
 
     for job in cold:
         _submit_and_wait(eids[job["group"]], job, jobs_path, cfg.job_timeout_s)

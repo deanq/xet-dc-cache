@@ -67,7 +67,16 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
             if line:
                 jobs.append(json.loads(line))
 
-    metric_rows = pq.read_table(metrics_path).to_pylist()
+    # Pod metrics are optional: they come from `make scrape` running during a
+    # run. Without them we still emit the job-latency report (the core signal)
+    # and simply omit the hit-rate / peering sections rather than crashing.
+    if os.path.exists(metrics_path):
+        metric_rows = pq.read_table(metrics_path).to_pylist()
+    else:
+        metric_rows = []
+        print(f"warning: {metrics_path} not found — omitting pod hit-rate and "
+              f"peering sections (run `make scrape RUNID={runid}` during a run "
+              f"to capture them)")
 
     latency = latency_by_phase(jobs)
     payoff = peering_payoff(metric_rows)
@@ -115,19 +124,27 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
 
     lines.append("## Per-pod hit rate / WAN bytes saved")
     lines.append("")
-    lines.append("| pod | effective_hit_rate | wan_bytes_saved |")
-    lines.append("|---|---|---|")
-    for pod in pods:
-        d = per_pod[pod]
-        lines.append(f"| {pod} | {d['effective_hit_rate']:.4f} | {d['wan_bytes_saved']} |")
+    if not metric_rows:
+        lines.append("_No pod metrics captured for this run "
+                     "(`make scrape` was not running); section omitted._")
+    else:
+        lines.append("| pod | effective_hit_rate | wan_bytes_saved |")
+        lines.append("|---|---|---|")
+        for pod in pods:
+            d = per_pod[pod]
+            lines.append(f"| {pod} | {d['effective_hit_rate']:.4f} | {d['wan_bytes_saved']} |")
     lines.append("")
 
     lines.append("## Peering payoff")
     lines.append("")
-    lines.append(f"- peer_bytes: {payoff['peer_bytes']}")
-    lines.append(f"- wan_bytes: {payoff['wan_bytes']}")
-    lines.append(f"- peer_fraction: {payoff['peer_fraction']:.4f}")
-    lines.append(f"- hedge_win_ratio: {payoff['hedge_win_ratio']:.4f}")
+    if not metric_rows:
+        lines.append("_No pod metrics captured for this run "
+                     "(`make scrape` was not running); section omitted._")
+    else:
+        lines.append(f"- peer_bytes: {payoff['peer_bytes']}")
+        lines.append(f"- wan_bytes: {payoff['wan_bytes']}")
+        lines.append(f"- peer_fraction: {payoff['peer_fraction']:.4f}")
+        lines.append(f"- hedge_win_ratio: {payoff['hedge_win_ratio']:.4f}")
     lines.append("")
 
     lines.append("## Cost note")

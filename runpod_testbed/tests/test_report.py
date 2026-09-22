@@ -1,4 +1,4 @@
-from runpod_testbed.harvest.report import latency_by_phase, peering_payoff
+from runpod_testbed.harvest.report import latency_by_phase, peering_payoff, headline
 
 JOBS = [
     {"phase": "cold", "result": {"results": [{"ok": True, "wall_seconds": 10.0, "bytes": 100}]}},
@@ -12,6 +12,21 @@ def test_latency_by_phase_ignores_failures():
     out = latency_by_phase(JOBS)
     assert out["cold"]["n"] == 1 and out["cold"]["median_s"] == 10.0
     assert out["warm"]["n"] == 2 and out["warm"]["median_s"] == 1.5
+
+
+def test_headline_computes_cold_warm_speedup():
+    h = headline(JOBS)
+    assert h["n_ok"] == 3                       # 1 cold + 2 warm ok (failure excluded)
+    assert h["cold_median_s"] == 10.0
+    assert h["warm_median_s"] == 1.5
+    assert h["speedup"] == 10.0 / 1.5           # ~6.67x
+    assert h["total_bytes"] == 300
+
+
+def test_headline_speedup_none_when_phase_missing():
+    only_cold = [{"phase": "cold",
+                  "result": {"results": [{"ok": True, "wall_seconds": 5.0, "bytes": 10}]}}]
+    assert headline(only_cold)["speedup"] is None
 
 
 def test_peering_payoff_uses_final_sample():

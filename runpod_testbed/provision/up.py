@@ -110,6 +110,10 @@ def main() -> None:
         subprocess.run(["flash", "deploy", "--env", flash_env],
                        cwd="runpod_testbed/worker", env=deploy_env, check=True)
         state.save(statef)
+        # Convenience pointer to the most recent successful run so downstream
+        # targets (notably the demo) need not copy/paste the RUNID timestamp.
+        with open("data/last-runid", "w") as fh:
+            fh.write(runid)
         print(f"UP runid={runid} pods={state.pods} flash_env={flash_env} addrs={addrs}")
     except Exception:
         from runpod_testbed.provision.down import teardown

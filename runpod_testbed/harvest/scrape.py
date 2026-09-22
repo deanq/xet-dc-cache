@@ -42,8 +42,15 @@ def scrape_once(pod_id: str, addr: str) -> list:
     return rows
 
 
+def write_metrics(buf: list, out: str) -> str:
+    """Flush collected metric rows to a parquet file. Returns a status line."""
+    import pyarrow as pa, pyarrow.parquet as pq
+    pq.write_table(pa.Table.from_pylist(buf), out)
+    return f"wrote {len(buf)} rows -> {out}"
+
+
 def main() -> None:  # integration: loop scrape all pods -> parquet
-    import sys, pyarrow as pa, pyarrow.parquet as pq
+    import sys, signal
     from runpod_testbed import config
     from runpod_testbed.provision.up import State
     from runpod_testbed.provision.fleet import Fleet, parse_external_addr
@@ -56,6 +63,15 @@ def main() -> None:  # integration: loop scrape all pods -> parquet
     fleet = Fleet()
     addrs = {p: parse_external_addr(fleet.get_pod_ports(p)) for p in st.pods}
     out = f"data/pod-metrics-{st.runid}.parquet"
+
+    # Flush on Ctrl-C (SIGINT → KeyboardInterrupt) AND on SIGTERM. The demo runs
+    # this scraper in the background and stops it with `kill`; without a SIGTERM
+    # handler that would drop every collected metric. Reuse the KeyboardInterrupt
+    # path so both signals flush identically.
+    def _flush_and_exit(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _flush_and_exit)
+
     buf = []
     try:
         while True:
@@ -64,5 +80,4 @@ def main() -> None:  # integration: loop scrape all pods -> parquet
                     buf.extend(scrape_once(pid, a))
             time.sleep(interval)
     except KeyboardInterrupt:
-        pq.write_table(pa.Table.from_pylist(buf), out)
-        print(f"wrote {len(buf)} rows -> {out}")
+        print(write_metrics(buf, out))

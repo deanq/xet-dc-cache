@@ -35,21 +35,30 @@ RUN      := uv run --with runpod
 # required var is actually missing).
 LOADENV = { set -a; . "$(ENV_FILE)" 2>/dev/null || true; set +a; }
 
-.PHONY: help setup test image up dry-run scrape drive report down _needs-runid _needs-cacheurl
+.PHONY: help setup test image up dry-run scrape drive report down demo demo-up demo-run \
+        _preflight _needs-runid _needs-cacheurl _needs-lastrunid
 
 help:
 	@echo "runpod_testbed — targets (run: make -C runpod_testbed <target>):"
 	@echo "  make setup                     install flash CLI + scaffold config.toml (idempotent)"
 	@echo "  make test                      unit tests (no Runpod, no spend)"
 	@echo "  make image [IMAGE=...]         build-linux + docker build the cache image"
-	@echo "  make up                        provision 3 pods + deploy 3 Flash endpoints"
-	@echo "  make dry-run CACHE_URL=...     validate wiring against one pod (no Flash)"
-	@echo "  make scrape RUNID=<id>         poll pod metrics -> parquet (foreground; & to bg)"
-	@echo "  make drive  RUNID=<id>         run the multi-model workload"
-	@echo "  make report RUNID=<id>         build latency + peering report"
-	@echo "  make down   RUNID=<id>         tear down endpoints + pods (MANDATORY)"
 	@echo ""
-	@echo "RUNID is the timestamp 'make up' prints. Every run costs money until 'make down'."
+	@echo "  DEMO (recommended flow):"
+	@echo "    make demo-up                 pre-flight + provision; run ~10 min before the demo"
+	@echo "    make demo-run                run workload, print the report, then auto-teardown"
+	@echo "    make demo                    demo-up + demo-run back-to-back (for rehearsal)"
+	@echo ""
+	@echo "  Manual pieces:"
+	@echo "    make up                      provision 3 pods + deploy 3 Flash endpoints"
+	@echo "    make dry-run CACHE_URL=...   validate wiring against one pod (no Flash)"
+	@echo "    make scrape RUNID=<id>       poll pod metrics -> parquet (foreground; & to bg)"
+	@echo "    make drive  RUNID=<id>       run the multi-model workload"
+	@echo "    make report RUNID=<id>       build latency + peering report"
+	@echo "    make down   RUNID=<id>       tear down endpoints + pods (MANDATORY)"
+	@echo ""
+	@echo "RUNID is the timestamp 'make up' prints (demo targets read it from data/last-runid)."
+	@echo "Every run costs money until teardown; demo-run always tears down, even on failure."
 
 # One-time, idempotent, non-destructive: installs the flash CLI if missing and
 # scaffolds config.toml from the example without clobbering an existing one.
@@ -99,8 +108,45 @@ report: _needs-runid
 down: _needs-runid
 	@cd $(ROOT) && $(LOADENV) && $(RUN) python -m runpod_testbed.provision.down $(STATE)
 
+# --- Demo orchestration ---------------------------------------------------
+# Pre-flight fails loudly (missing secrets / bad config / orphaned resources)
+# BEFORE spending money, so problems show up at your desk, not on stage.
+_preflight:
+	@cd $(ROOT) && $(LOADENV) && $(RUN) python -m runpod_testbed.provision.preflight
+
+# Run ~10 min before the demo: check, provision, wait until healthy. up.py
+# writes data/last-runid so demo-run needs no RUNID argument.
+demo-up: _preflight
+	@cd $(ROOT) && $(LOADENV) && $(RUN) python -m runpod_testbed.provision.up $(CONFIG)
+	@echo ""
+	@echo "demo fleet is UP. When the audience is ready:  make -C runpod_testbed demo-run"
+
+# Run live: scrape (bg) -> drive -> stop scrape (flush) -> report -> print it.
+# A trap tears the fleet down on EXIT — success or failure — so nothing is left
+# billing even if a step fails mid-demo.
+demo-run: _needs-lastrunid
+	@cd $(ROOT) && $(LOADENV) && set -e; \
+	RUNID=$$(cat data/last-runid); \
+	echo "demo-run RUNID=$$RUNID"; \
+	$(RUN) --with pyarrow python -m runpod_testbed.harvest.scrape data/state-$$RUNID.json & \
+	SCRAPE_PID=$$!; \
+	trap 'echo; echo "=== teardown ==="; kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; $(RUN) python -m runpod_testbed.provision.down data/state-$$RUNID.json' EXIT; \
+	sleep 2; \
+	$(RUN) python -m runpod_testbed.drive.run $(CONFIG) $$RUNID; \
+	kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; \
+	uv run --with pyarrow --with matplotlib python -m runpod_testbed.harvest.report $$RUNID; \
+	echo; echo "========== DEMO REPORT =========="; cat data/report-$$RUNID.md; echo "================================="
+
+# All-in-one for rehearsal (provision + run back-to-back).
+demo:
+	@$(MAKE) demo-up
+	@$(MAKE) demo-run
+
 _needs-runid:
 	@[ -n "$(RUNID)" ] || { echo "error: set RUNID=<timestamp printed by 'make up'>"; exit 1; }
+
+_needs-lastrunid:
+	@[ -s $(ROOT)/data/last-runid ] || { echo "error: no data/last-runid — run 'make demo-up' first"; exit 1; }
 
 _needs-cacheurl:
 	@[ -n "$(CACHE_URL)" ] || { echo "error: set CACHE_URL=http://<pod-addr>:8000"; exit 1; }

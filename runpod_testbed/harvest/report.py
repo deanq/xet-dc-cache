@@ -22,6 +22,25 @@ def latency_by_phase(jobs: list) -> dict:
     return out
 
 
+def headline(jobs: list) -> dict:
+    """The demo money-stat: cold→warm speedup, job count, bytes served.
+
+    speedup is the ratio of cold to warm median wall time (how many times
+    faster a warm cache hit is); None if either phase is absent or warm is 0.
+    """
+    lat = latency_by_phase(jobs)
+    cold, warm = lat.get("cold"), lat.get("warm")
+    n_ok = sum(1 for _ in _ok_results(jobs))
+    total_bytes = sum(d["total_bytes"] for d in lat.values())
+    speedup = None
+    if cold and warm and warm["median_s"] > 0:
+        speedup = cold["median_s"] / warm["median_s"]
+    return {"n_ok": n_ok, "total_bytes": total_bytes,
+            "cold_median_s": cold["median_s"] if cold else None,
+            "warm_median_s": warm["median_s"] if warm else None,
+            "speedup": speedup}
+
+
 def _final_by_pod(rows, name):
     latest = {}
     for r in rows:
@@ -112,6 +131,16 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
         plt.close(fig)
 
     lines = [f"# Runpod cache testbed report — {runid}", ""]
+
+    h = headline(jobs)
+    lines.append("## Headline")
+    lines.append("")
+    if h["speedup"] is not None:
+        lines.append(f"- **Cold→warm speedup: {h['speedup']:.1f}× faster** "
+                     f"(median wall {h['cold_median_s']:.2f}s → {h['warm_median_s']:.3f}s)")
+    lines.append(f"- Jobs completed OK: {h['n_ok']}")
+    lines.append(f"- Total bytes served: {h['total_bytes']}")
+    lines.append("")
 
     lines.append("## Latency by phase")
     lines.append("")

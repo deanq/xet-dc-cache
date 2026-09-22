@@ -7,7 +7,7 @@ def _cfg():
                   worker_cpu="cpu5c-4-8", worker_deps=["huggingface_hub"],
                   models=["x"], overlap={"A": ["x"]}, burst=3, max_pods=3,
                   max_burst=8, pod_instance_id="cpu3c-2-4",
-                  container_disk_gb=60, scrape_interval_s=5)
+                  container_disk_gb=60, scrape_interval_s=5, job_timeout_s=600)
 
 def test_flash_deploy_env_maps_addrs_and_worker_knobs():
     env = flash_deploy_env({"A": "http://1:41", "B": "http://2:42", "C": "http://3:43"},

@@ -2,20 +2,13 @@
 # COLD-then-WARM-BURST job list, submits jobs to the 3 Flash serverless
 # endpoints, and records per-job timings to JSONL.
 #
-# NOTE on flash_manifest.json shape (unverified as of Task 5):
-# `endpoint_ids` below assumes manifest = {"endpoints": [{"function":
-# "xet-dl-A", "endpoint_id": "..."}]}. A best-effort check of the Flash
-# docs/source (docs.runpod.io/flash, github.com/runpod/flash) suggests the
-# real manifest instead carries a "functions" array (name/module/
-# resource_name/is_class/routes) plus a "resources" array, and that
-# function-name -> endpoint_id resolution happens at call time via a
-# separate State Manager (GraphQL) lookup keyed on (environment_id,
-# resource_name) -- not as a static "endpoints" list with function/
-# endpoint_id pairs baked into the manifest file. This assumed shape is
-# unconfirmed against a real `flash deploy` output. Keep this
-# implementation as-is (it matches the Task-5 brief and is unit-tested
-# against the assumed shape below); confirm against a live manifest and
-# adjust in Task 8 before spending real endpoint calls on it.
+# flash_manifest.json shape (confirmed 2026-09-22 against a live `flash deploy`
+# output): {"resources": {"xet-dl-A": {"functions": [...], "endpoint_id": "..."},
+# ...}}. `endpoint_ids` below parses that shape, keying each endpoint by the
+# trailing group letter. The resources carry resource_type "CpuLiveServerless"
+# / is_live_resource:true, but that is a manifest scan-time artifact — because
+# they are is_load_balanced:false, Flash deploys them as queue-based endpoints
+# invoked via runpod.Endpoint(eid).run()/.runsync() (the `/runsync` path).
 from __future__ import annotations
 import argparse
 import concurrent.futures
@@ -50,13 +43,20 @@ def record(job: dict, result: dict, submit_ts: float, path: str) -> None:
         fh.write(json.dumps(row) + "\n")
 
 
-def _submit_and_wait(eid: str, job: dict, jobs_path: str) -> None:
+def _submit_and_wait(eid: str, job: dict, jobs_path: str, timeout_s: int) -> None:
     import runpod
 
     submit_ts = time.time()
     payload = {"input": {"models": [job["model"]]}}
     handle = runpod.Endpoint(eid).run(payload)
-    result = handle.output()
+    # runpod's Job.output(timeout=0) does NOT poll — it returns None the instant
+    # the result isn't ready, which for a cold worker is always. Pass a real
+    # ceiling so we wait for boot + dep install + download. A timeout is a value:
+    # record it (with the last status) instead of crashing the burst pool.
+    try:
+        result = handle.output(timeout=timeout_s)
+    except TimeoutError as e:
+        result = {"ok": False, "error": str(e), "status": handle.status()}
     record(job, result, submit_ts, jobs_path)
 
 
@@ -97,10 +97,11 @@ def main(argv: list | None = None) -> None:
     jobs_path = f"data/jobs-{args.runid}.jsonl"
 
     for job in cold:
-        _submit_and_wait(eids[job["group"]], job, jobs_path)
+        _submit_and_wait(eids[job["group"]], job, jobs_path, cfg.job_timeout_s)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.burst) as pool:
-        futures = [pool.submit(_submit_and_wait, eids[job["group"]], job, jobs_path)
+        futures = [pool.submit(_submit_and_wait, eids[job["group"]], job,
+                               jobs_path, cfg.job_timeout_s)
                    for job in warm]
         for f in concurrent.futures.as_completed(futures):
             f.result()

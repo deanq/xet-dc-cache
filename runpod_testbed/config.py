@@ -17,12 +17,18 @@ class Config:
     pod_instance_id: str
     container_disk_gb: int
     scrape_interval_s: int
+    job_timeout_s: int
 
 _REQUIRED = ("dc", "registry", "cache_image", "worker_cpu", "worker_deps",
              "models", "overlap", "burst", "max_pods", "max_burst",
-             "pod_instance_id", "container_disk_gb", "scrape_interval_s")
+             "pod_instance_id", "container_disk_gb", "scrape_interval_s",
+             "job_timeout_s")
 
-_DEFAULTS = {"dc": "EU-RO-1"}
+# job_timeout_s: how long drive waits for a single job's result. runpod's
+# Job.output(timeout=0) does NOT wait — it returns None immediately — so drive
+# must pass a real ceiling that covers a cold worker's boot + dep install +
+# download. Optional (defaulted) so pre-existing configs keep working.
+_DEFAULTS = {"dc": "EU-RO-1", "job_timeout_s": 600}
 
 def load_str(text: str) -> Config:
     raw = tomllib.loads(text)

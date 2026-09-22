@@ -25,10 +25,14 @@ def _mk(name: str, pod_addr: str):
                     workers=(0, _MAX), idle_timeout=5, dependencies=_DEPS,
                     env={"HF_ENDPOINT": pod_addr, "HF_TOKEN": _HF_TOKEN})(handler)
 
-# up.py exports POD_ADDR_A/B/C before `flash deploy`; groups map A/B/C -> pods.
-# The A/B/C set (exactly three groups) is enforced in config.load (load_str) --
-# a non-{A,B,C} overlap config raises ValueError there before any pod is
-# provisioned, so this module can assume POD_ADDR_A/B/C always exist.
-download_A = _mk("xet-dl-A", os.environ["POD_ADDR_A"])
-download_B = _mk("xet-dl-B", os.environ["POD_ADDR_B"])
-download_C = _mk("xet-dl-C", os.environ["POD_ADDR_C"])
+# up.py exports POD_ADDR_A/B/C for the `flash deploy` process, where _mk reads
+# them to bake each endpoint's HF_ENDPOINT env. They are ABSENT at worker
+# runtime (the deployed worker's env carries only HF_ENDPOINT/HF_TOKEN), yet the
+# worker re-imports this whole module to locate the handler — so reading
+# os.environ["POD_ADDR_A"] here crashes every worker at import (exit code 1).
+# Default to "" so runtime import is safe; the value is unused at runtime (the
+# handler downloads through HF_ENDPOINT, already set on the endpoint). At deploy
+# time the real addrs are present, so HF_ENDPOINT is still baked correctly.
+download_A = _mk("xet-dl-A", os.environ.get("POD_ADDR_A", ""))
+download_B = _mk("xet-dl-B", os.environ.get("POD_ADDR_B", ""))
+download_C = _mk("xet-dl-C", os.environ.get("POD_ADDR_C", ""))

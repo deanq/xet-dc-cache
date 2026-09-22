@@ -14,15 +14,21 @@ _MAX = int(os.environ.get("WORKER_MAX", "4"))
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 def _mk(name: str, pod_addr: str):
-    async def handler(payload: dict) -> dict:
+    # The generated deployed handler (build_utils/handler_generator.py) resolves
+    # this function as `flash_app.<func_name>` and CALLS it as `func(**job_input)`
+    # — the job's `input` dict is splatted as kwargs, not passed as one arg. So:
+    #  (1) the module-level binding MUST be named exactly `func_name` (the handler
+    #      __name__), or `getattr(flash_app, func_name)` raises AttributeError at
+    #      handler import → the worker exits 1 before any job runs; and
+    #  (2) the handler must accept the input keys as kwargs, hence **payload.
+    async def handler(**payload) -> dict:
         return run_download(payload, hf_download)
-    # Flash's manifest scanner reads the *unwrapped* function's __name__ as the
-    # handler name (build_utils/scanner.py) and rejects duplicates. The factory's
-    # source name would collide across A/B/C, so rename the original BEFORE
-    # Endpoint wraps it (a post-decoration rename lands on the wrapper, too late).
+    # __name__ drives both the manifest function name and the getattr above, and
+    # must be unique across A/B/C (the scanner rejects duplicate names). Rename
+    # BEFORE Endpoint wraps it (a post-decoration rename lands on the wrapper).
     handler.__name__ = handler.__qualname__ = name.replace("-", "_")
     return Endpoint(name=name, cpu=_CPU, datacenter=DataCenter.EU_RO_1,
-                    workers=(0, _MAX), idle_timeout=5, dependencies=_DEPS,
+                    workers=(0, _MAX), idle_timeout=30, dependencies=_DEPS,
                     env={"HF_ENDPOINT": pod_addr, "HF_TOKEN": _HF_TOKEN})(handler)
 
 # up.py exports POD_ADDR_A/B/C for the `flash deploy` process, where _mk reads
@@ -33,6 +39,9 @@ def _mk(name: str, pod_addr: str):
 # Default to "" so runtime import is safe; the value is unused at runtime (the
 # handler downloads through HF_ENDPOINT, already set on the endpoint). At deploy
 # time the real addrs are present, so HF_ENDPOINT is still baked correctly.
-download_A = _mk("xet-dl-A", os.environ.get("POD_ADDR_A", ""))
-download_B = _mk("xet-dl-B", os.environ.get("POD_ADDR_B", ""))
-download_C = _mk("xet-dl-C", os.environ.get("POD_ADDR_C", ""))
+#
+# The binding names MUST equal each handler's __name__ (xet_dl_A/B/C) — the
+# generated handler does `importlib.import_module('flash_app').xet_dl_A`.
+xet_dl_A = _mk("xet-dl-A", os.environ.get("POD_ADDR_A", ""))
+xet_dl_B = _mk("xet-dl-B", os.environ.get("POD_ADDR_B", ""))
+xet_dl_C = _mk("xet-dl-C", os.environ.get("POD_ADDR_C", ""))

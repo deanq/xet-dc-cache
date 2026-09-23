@@ -77,6 +77,27 @@ def test_submit_and_wait_records_timeout_instead_of_crashing(tmp_path, monkeypat
     assert row["result"]["status"] == "IN_QUEUE"
 
 
+def test_submit_and_wait_records_transient_api_error_without_crashing(tmp_path, monkeypatch):
+    # A transient Runpod-API error during polling (not a TimeoutError) must be
+    # recorded, not raised — otherwise one flaky poll aborts the whole run.
+    class _BoomHandle:
+        job_id = "j"
+        def output(self, timeout=0):
+            raise RuntimeError("Read timed out")
+        def status(self):
+            raise RuntimeError("api unreachable")
+    _install_fake_runpod(monkeypatch, _BoomHandle())
+    jobs_path = tmp_path / "jobs.jsonl"
+    job = {"group": "A", "model": "org/m@main", "phase": "warm", "replica": 0}
+
+    _submit_and_wait("ep-a", job, str(jobs_path), timeout_s=5)
+
+    row = json.loads(jobs_path.read_text().strip())
+    assert row["result"]["ok"] is False
+    assert "RuntimeError" in row["result"]["error"]
+    assert row["result"]["status"] is None   # status() also failed, guarded
+
+
 def test_start_jobs_file_truncates_so_reruns_dont_double_count(tmp_path):
     # Regression: record() appends, so a second drive pass on the same RUNID
     # must not accumulate on top of the first pass's rows.

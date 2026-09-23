@@ -43,9 +43,21 @@ def scrape_once(pod_id: str, addr: str) -> list:
 
 
 def write_metrics(buf: list, out: str) -> str:
-    """Flush collected metric rows to a parquet file. Returns a status line."""
+    """Flush collected metric rows to a parquet file. Returns a status line.
+
+    Uses an explicit schema (labels as a string→string map) so a cycle whose
+    rows all carry empty labels still writes — inferring the type from data
+    would fail with "struct type 'labels' with no child field".
+    """
     import pyarrow as pa, pyarrow.parquet as pq
-    pq.write_table(pa.Table.from_pylist(buf), out)
+    schema = pa.schema([
+        ("name", pa.string()),
+        ("labels", pa.map_(pa.string(), pa.string())),
+        ("value", pa.float64()),
+        ("pod", pa.string()),
+        ("ts", pa.float64()),
+    ])
+    pq.write_table(pa.Table.from_pylist(buf, schema=schema), out)
     return f"wrote {len(buf)} rows -> {out}"
 
 
@@ -72,12 +84,27 @@ def main() -> None:  # integration: loop scrape all pods -> parquet
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, _flush_and_exit)
 
+    print(f"scrape: {sum(1 for a in addrs.values() if a)} pods, "
+          f"interval {interval}s -> {out}", flush=True)
     buf = []
     try:
         while True:
             for pid, a in addrs.items():
                 if a:
-                    buf.extend(scrape_once(pid, a))
+                    try:
+                        buf.extend(scrape_once(pid, a))
+                    except Exception as e:  # one flaky pod must not stop the run
+                        print(f"scrape: {pid} scrape failed: {e}", flush=True)
+            # Write every cycle so the parquet survives ANY stop (SIGTERM, SIGKILL,
+            # or the process being reaped by a parent) — the report only needs the
+            # latest sample per pod, so re-writing the growing buffer is correct.
+            if buf:
+                write_metrics(buf, out)
             time.sleep(interval)
     except KeyboardInterrupt:
-        print(write_metrics(buf, out))
+        msg = write_metrics(buf, out) if buf else "scrape: no metrics collected"
+        print(msg, flush=True)
+
+
+if __name__ == "__main__":
+    main()

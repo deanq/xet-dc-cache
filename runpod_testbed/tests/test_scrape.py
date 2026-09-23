@@ -31,3 +31,16 @@ def test_write_metrics_roundtrip(tmp_path):
     assert "wrote 2 rows" in msg
     back = pq.read_table(out).to_pylist()
     assert back[0]["name"] == "xet_hits_total" and back[0]["pod"] == "A"
+
+
+def test_write_metrics_handles_all_empty_labels(tmp_path):
+    # Regression: a cycle whose rows all have empty labels must still write
+    # (inferring the schema from data would fail on an empty struct).
+    import pyarrow.parquet as pq
+    rows = [
+        {"name": "xet_hits_total", "labels": {}, "value": 1.0, "pod": "A", "ts": 1.0},
+        {"name": "xet_misses_total", "labels": {}, "value": 2.0, "pod": "A", "ts": 1.0},
+    ]
+    out = str(tmp_path / "m.parquet")
+    write_metrics(rows, out)  # must not raise
+    assert len(pq.read_table(out).to_pylist()) == 2

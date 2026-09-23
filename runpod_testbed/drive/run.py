@@ -62,12 +62,20 @@ def _submit_and_wait(eid: str, job: dict, jobs_path: str, timeout_s: int) -> Non
     handle = runpod.Endpoint(eid).run(payload)
     # runpod's Job.output(timeout=0) does NOT poll — it returns None the instant
     # the result isn't ready, which for a cold worker is always. Pass a real
-    # ceiling so we wait for boot + dep install + download. A timeout is a value:
-    # record it (with the last status) instead of crashing the burst pool.
+    # ceiling so we wait for boot + dep install + download.
+    #
+    # Any failure here is a value, not a crash: a job timeout OR a transient
+    # error from the Runpod API during polling (e.g. requests.ReadTimeout on the
+    # SDK's 10s status GET) must not kill the burst pool and abort the whole run.
+    # Record it (with the last status if reachable) and move on.
     try:
         result = handle.output(timeout=timeout_s)
-    except TimeoutError as e:
-        result = {"ok": False, "error": str(e), "status": handle.status()}
+    except Exception as e:
+        try:
+            status = handle.status()
+        except Exception:
+            status = None
+        result = {"ok": False, "error": f"{type(e).__name__}: {e}", "status": status}
     record(job, result, submit_ts, jobs_path)
 
 

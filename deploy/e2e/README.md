@@ -2,7 +2,8 @@
 
 Boots three real shim containers (`node-a`, `node-b`, `node-c`) that peer with
 each other, and drives real `hf_hub_download`s through them against the live
-HuggingFace CDN to prove the peering behavior end-to-end.
+HuggingFace CDN to prove the cache behavior end-to-end — cross-node peering and
+cross-revision reuse.
 
 ## Run
 
@@ -12,7 +13,7 @@ From the repo root (needs Docker + network):
 uv run deploy/e2e/run_e2e.py
 ```
 
-Override the model (default `SmolLM2-135M-Instruct`, ~270 MB, downloaded a few
+Override the model (default `SmolLM2-1.7B-Instruct`, ~3 GB, downloaded a few
 times):
 
 ```bash
@@ -34,6 +35,11 @@ PASS/FAIL summary, and tears the stack down.
 3. **Resilience** — with `node-b`/`node-c` stopped and `node-a` cold, the same
    download still completes via the CDN (`wan_bytes` up, `peer_bytes` == 0):
    peering is an accelerator, never a dependency.
+4. **Cross-revision dedup** — with peers still down and `node-a` now warm, a pull
+   of the *same file at a different, byte-identical revision* is served from
+   `node-a`'s own cache (`hits` up, `wan_bytes` == 0, `peer_bytes` == 0):
+   unchanged files across model versions reconstruct from the same xorbs, so
+   re-pulls at a pinned-but-unchanged revision cost zero WAN.
 
 ## Networking model
 

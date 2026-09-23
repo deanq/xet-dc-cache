@@ -140,10 +140,14 @@ def run_pair(dc_a: str, dc_b: str) -> dict:
             "pair": f"{dc_a} -> {dc_b}", "bytes_ok": sha_a == _sha_b,
             "peer_bytes": peer, "wan_bytes": wan, "served_bytes": served,
             "peer_fraction": (peer / total) if total else 0.0,
+            # Real peer-hop rate, measured pod-side (bytes/ms EWMA); the honest
+            # "how fast is the peer" number, independent of the client's link.
+            "peer_throughput_bytes_per_ms": after.get("peer_throughput_bytes_per_ms"),
             "hedge_fired": fired, "hedge_peer_won": peer_won,
             "peer_probe_timeouts": probe_to, "peer_misses": peer_miss,
-            "seconds": round(dt, 1),
-            "mb_s": round(served / max(dt, 1e-6) / 1e6) if served else 0,
+            # NOT peer speed: wall time for MY laptop to pull the file from pod A,
+            # bottlenecked by the client<-pod-A WAN leg. Kept only for context.
+            "client_wall_seconds": dt,
         }
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -156,10 +160,20 @@ def run_pair(dc_a: str, dc_b: str) -> dict:
 
 
 def _fmt(r: dict) -> str:
-    return (f"  {r['pair']:<22} peer={r['peer_bytes']:>12,}  wan={r['wan_bytes']:>12,}"
-            f"  peer_frac={r['peer_fraction']:.2f}  probe_timeouts={r['peer_probe_timeouts']}"
-            f"  hedge_won={r['hedge_peer_won']}/{r['hedge_fired']}"
-            f"  {r['seconds']}s ({r['mb_s']} MB/s)  {'ok' if r['bytes_ok'] else 'BYTES DIFFER'}")
+    # Precise, unrounded (repr of the raw floats/ints).
+    tp = r["peer_throughput_bytes_per_ms"]
+    tp_mb_s = (tp / 1000.0) if tp is not None else None  # bytes/ms -> MB/s
+    return (
+        f"  {r['pair']}\n"
+        f"    peer_bytes            = {r['peer_bytes']}\n"
+        f"    wan_bytes             = {r['wan_bytes']}\n"
+        f"    peer_fraction         = {r['peer_fraction']!r}\n"
+        f"    peer_throughput       = {tp!r} bytes/ms  (= {tp_mb_s!r} MB/s)\n"
+        f"    probe_timeouts        = {r['peer_probe_timeouts']}   peer_misses = {r['peer_misses']}"
+        f"   hedge_peer_won = {r['hedge_peer_won']}/{r['hedge_fired']}\n"
+        f"    client_wall_seconds   = {r['client_wall_seconds']!r}  (WAN-bottlenecked client<-podA leg, NOT peer speed)\n"
+        f"    bytes_ok              = {r['bytes_ok']}"
+    )
 
 
 def main() -> None:

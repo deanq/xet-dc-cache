@@ -17,8 +17,8 @@ approximate:
   3. Resilience    -- with peers stopped, the same cold node still completes via
      the CDN: peering is an accelerator, never a dependency.
 
-Needs network + Docker. Downloads the model a few times (default SmolLM2-135M,
-~270 MB). Override with SMOKE_REPO / SMOKE_REV / SMOKE_PATH.
+Needs network + Docker. Downloads the model a few times (default SmolLM2-1.7B,
+~3 GB). Override with SMOKE_REPO / SMOKE_REV / SMOKE_PATH.
 
     uv run deploy/e2e/run_e2e.py            # from repo root
 """
@@ -37,7 +37,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = os.environ.get("SMOKE_REPO", "HuggingFaceTB/SmolLM2-135M-Instruct")
+REPO = os.environ.get("SMOKE_REPO", "HuggingFaceTB/SmolLM2-1.7B-Instruct")
 REV = os.environ.get("SMOKE_REV", "main")
 FILE = os.environ.get("SMOKE_PATH", "model.safetensors")
 

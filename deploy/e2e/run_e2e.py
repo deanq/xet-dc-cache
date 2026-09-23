@@ -7,15 +7,18 @@
 
 Boots the deploy/e2e docker-compose stack (node-a/b/c, each the real shim image,
 peered with the other two) and drives real `hf_hub_download`s through them
-against the live HuggingFace CDN, asserting three things the unit tests can only
+against the live HuggingFace CDN, asserting four things the unit tests can only
 approximate:
 
-  1. WAN fallback  -- a download through a node whose peers are all cold pulls
+  1. WAN fallback   -- a download through a node whose peers are all cold pulls
      from the CDN (wan_bytes up, peer_misses up) and produces correct bytes.
-  2. Peer warm hit -- a download through a cold node whose peer is now warm is
+  2. Peer warm hit  -- a download through a cold node whose peer is now warm is
      served from the peer (peer_bytes up, wan_bytes ~0) and byte-identical.
-  3. Resilience    -- with peers stopped, the same cold node still completes via
+  3. Resilience     -- with peers stopped, the same cold node still completes via
      the CDN: peering is an accelerator, never a dependency.
+  4. Cross-revision -- the same file at a different, byte-identical revision is
+     served from the node's own cache (hits up, wan_bytes 0): unchanged files
+     across model versions reconstruct from the same xorbs, so re-pulls are free.
 
 Needs network + Docker. Downloads the model a few times (default SmolLM2-1.7B,
 ~3 GB). Override with SMOKE_REPO / SMOKE_REV / SMOKE_PATH.
@@ -75,16 +78,37 @@ def sh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(args, check=check, capture_output=True, text=True)
 
 
-def download(endpoint: str, out: Path) -> str:
-    """Run a download in a subprocess; returns the file's sha256."""
+def download(endpoint: str, out: Path, rev: str = REV) -> str:
+    """Run a download in a subprocess; returns the file's sha256.
+
+    rev defaults to REV; pass an explicit revision for the cross-revision
+    scenario (same file at a different commit).
+    """
     proc = subprocess.run(
-        [sys.executable, __file__, "--worker", REPO, REV, FILE, endpoint, str(out)],
+        [sys.executable, __file__, "--worker", REPO, rev, FILE, endpoint, str(out)],
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"download via {endpoint} failed:\n{proc.stderr}")
     return proc.stdout.strip().splitlines()[-1]
+
+
+def older_identical_rev() -> str | None:
+    """Find an older commit whose FILE is byte-identical to REV's.
+
+    Used by the cross-revision scenario. Returns a commit SHA, or None if the
+    repo has no earlier revision to compare against. Identity is asserted for
+    real in the scenario (its sha256 must match ground truth), so this only
+    needs to pick a *different* commit; model weight files are immutable across
+    revisions in practice (measured 100% identical), so the previous commit works.
+    """
+    from huggingface_hub import list_repo_commits
+
+    commits = list_repo_commits(REPO, revision=REV)
+    for c in commits[1:]:
+        return c.commit_id
+    return None
 
 
 def metrics(port: int) -> dict:
@@ -202,6 +226,32 @@ def main() -> int:
         rep.check("s3 completed with peers down", sha == truth)
         rep.check("s3 fell back to WAN", d_wan > 0, f"wan_bytes +{d_wan}")
         rep.check("s3 got nothing from (dead) peers", d_peer_bytes == 0, f"peer_bytes +{d_peer_bytes}")
+        print()
+
+        # Scenario 4: cross-revision whole-file dedup. node-a is now warm with
+        # REV's xorbs (from s3) and its peers are down, so any cache benefit here
+        # is purely node-a's OWN shim cache. Pull the SAME file at a DIFFERENT,
+        # byte-identical revision: the file's Xet identity is unchanged, so it
+        # reconstructs from the same xorbs -> served from cache, zero new WAN.
+        print("== scenario 4: cross-revision dedup (same file, different revision) ==")
+        other = older_identical_rev()
+        if other is None:
+            rep.check("s4 has an earlier revision to test", False,
+                      f"{REPO} has only one commit")
+        else:
+            before = metrics(8001)
+            sha = download("http://127.0.0.1:8001", truth_dir / "s4.bin", rev=other)
+            after = metrics(8001)
+            d_wan = delta(before, after, "wan_bytes")
+            d_hits = delta(before, after, "hits")
+            d_peer_bytes = delta(before, after, "peer_bytes")
+            rep.check("s4 same bytes at a different revision", sha == truth,
+                      f"rev {other[:10]} identical to {REV}")
+            rep.check("s4 served from cache -- zero new WAN", d_wan == 0,
+                      f"wan_bytes +{d_wan}")
+            rep.check("s4 registered shim cache hits", d_hits > 0, f"hits +{d_hits}")
+            rep.check("s4 was the shim's own cache, not a peer", d_peer_bytes == 0,
+                      f"peer_bytes +{d_peer_bytes}")
         print()
 
         print("== summary ==")

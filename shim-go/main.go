@@ -186,7 +186,7 @@ func main() {
 	// conflict with (and is redundant alongside) the other GET patterns.
 	mux.HandleFunc("GET /", s.hub)
 
-	handler := withLogging(withAuth(s.authToken, mux))
+	handler := withLogging(s.metrics, withAuth(s.authToken, mux))
 
 	port := env("PORT", "8000")
 	slog.Info("xet-dc-cache starting",

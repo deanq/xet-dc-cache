@@ -76,11 +76,30 @@ func TestWithLoggingCapturesStatusAndPassesThrough(t *testing.T) {
 		_, _ = w.Write([]byte("hello"))
 	})
 	rec := httptest.NewRecorder()
-	withLogging(next).ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+	m := NewMetrics()
+	withLogging(m, next).ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
 	if rec.Code != http.StatusPartialContent {
 		t.Fatalf("status = %d, want 206 (logging must not alter the response)", rec.Code)
 	}
 	if rec.Body.String() != "hello" {
 		t.Fatalf("body = %q, want hello", rec.Body.String())
+	}
+	// "/x" is not /cas or /xorb, so it counts as a hub request.
+	if got := m.Snapshot()["req_hub"]; got != int64(1) {
+		t.Fatalf("req_hub = %v, want 1", got)
+	}
+}
+
+func TestRequestClass(t *testing.T) {
+	cases := map[string]string{
+		"/":                                  "hub",
+		"/api/models/x/xet-read-token/main":  "hub",
+		"/cas/v1/reconstructions/abc":        "reconstruction",
+		"/xorb/xorbs/default/deadbeef":       "xorb",
+	}
+	for path, want := range cases {
+		if got := requestClass(path); got != want {
+			t.Errorf("requestClass(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

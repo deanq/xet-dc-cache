@@ -28,13 +28,34 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// requestClass buckets a request path by the shim role it exercises, so
+// per-path counters can show which stages a client actually routes through the
+// shim: "hub" (metadata: token / resolve / api), "reconstruction" (the Xet
+// terms/xorbs manifest), or "xorb" (the actual chunk bytes). A client that hits
+// hub but not xorb is fetching bytes elsewhere (e.g. hf_xet going direct to CAS).
+func requestClass(p string) string {
+	switch {
+	case strings.HasPrefix(p, "/cas/"):
+		return "reconstruction"
+	case strings.HasPrefix(p, "/xorb/"):
+		return "xorb"
+	default:
+		return "hub"
+	}
+}
+
 // withLogging emits one structured (slog) line per request at completion:
 // method, path, status, the X-Cache disposition (HIT/MISS), bytes, duration.
-func withLogging(next http.Handler) http.Handler {
+// It also increments a per-path request counter (req_hub / req_reconstruction /
+// req_xorb) so /metrics reveals where a client's traffic actually lands.
+func withLogging(m *Metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+		if !isOperationalPath(r.URL.Path) {
+			m.Incr("req_"+requestClass(r.URL.Path), 1)
+		}
 		slog.Info("request",
 			"method", r.Method,
 			"path", r.URL.Path,

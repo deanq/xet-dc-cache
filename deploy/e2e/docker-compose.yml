@@ -65,6 +65,20 @@ services:
       - ./caches/c:/cache
     networks: [xet]
 
+  node-evict:
+    image: xet-dc-cache:e2e
+    user: "0:0"  # e2e-only: write the host bind-mount despite Colima root:root mapping
+    environment:
+      PORT: "8000"
+      CACHE_DIR: /cache
+      PUBLIC_BASE: http://127.0.0.1:8004
+      XORB_CACHE_MAX_GIB: "1"
+    ports:
+      - "8004:8000"
+    volumes:
+      - ./caches/evict:/cache
+    networks: [xet]
+
 networks:
   xet:
     driver: bridge

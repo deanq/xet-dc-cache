@@ -1,4 +1,4 @@
-from runpod_testbed.harvest.report import latency_by_phase, peering_payoff, headline
+from runpod_testbed.harvest.report import latency_by_phase, peering_payoff, headline, coldstart
 
 JOBS = [
     {"phase": "cold", "result": {"results": [{"ok": True, "wall_seconds": 10.0, "bytes": 100}]}},
@@ -38,3 +38,20 @@ def test_peering_payoff_uses_final_sample():
     out = peering_payoff(rows)
     assert out["peer_bytes"] == 30 and out["wan_bytes"] == 70
     assert abs(out["peer_fraction"] - 0.3) < 1e-9
+
+
+COLD_JOBS = [
+    {"result": {"cold_first_invocation": True, "dep_upgrade_ms": 15000,
+                "results": [{"ok": True, "wall_seconds": 40.0}]}},
+    {"result": {"cold_first_invocation": False, "dep_upgrade_ms": 0,
+                "results": [{"ok": True, "wall_seconds": 5.0}]}},
+    {"result": {"cold_first_invocation": False, "dep_upgrade_ms": 0,
+                "results": [{"ok": True, "wall_seconds": 3.0}]}},
+]
+
+def test_coldstart_separates_cold_and_warm():
+    c = coldstart(COLD_JOBS)
+    assert c["n_cold"] == 1
+    assert c["cold_mean_s"] == 40.0
+    assert c["warm_mean_s"] == 4.0
+    assert c["dep_upgrade_ms"] == 15000

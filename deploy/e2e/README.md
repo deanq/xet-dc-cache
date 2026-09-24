@@ -65,8 +65,8 @@ flowchart TB
     nb --- cb
     nc --- cc
 
-    classDef node fill:#e6f2ff,stroke:#0366d6;
-    classDef ext fill:#fff5e6,stroke:#d9822b;
+    classDef node fill:#bcd8ff,stroke:#1f6feb,stroke-width:1.5px,color:#0b1f33;
+    classDef ext fill:#ffd9a8,stroke:#bf6a00,stroke-width:1.5px,color:#3d2600;
     class na,nb,nc node;
     class cdn ext;
 ```
@@ -93,42 +93,34 @@ sequenceDiagram
     Note over A,C: all caches reset → cold
     D->>W: ground-truth DIRECT pull (no shim) → record sha256
 
-    rect rgb(255,245,230)
-    Note over D,W: Scenario 1 — WAN fallback (node-c, peers cold)
+    Note over D,W: ── Scenario 1 — WAN fallback (node-c, peers cold) ──
     D->>C: pull model.safetensors
     C->>A: peer probe (HEAD) → miss
     C->>W: fetch xorbs
     W-->>C: bytes
     C-->>D: bytes (sha == truth)
     Note right of C: wan_bytes↑, peer_misses↑, peer_bytes 0<br/>node-c now WARM
-    end
 
-    rect rgb(230,242,255)
-    Note over D,C: Scenario 2 — peer warm hit (node-a cold, node-c warm)
+    Note over D,C: ── Scenario 2 — peer warm hit (node-a cold, node-c warm) ──
     D->>A: pull model.safetensors
     A->>C: peer probe + range GET
     C-->>A: bytes over LAN
     A-->>D: bytes (sha == truth)
     Note right of A: peer_bytes↑, wan_bytes 0 (peer displaced WAN)
-    end
 
-    rect rgb(255,235,235)
-    Note over D,W: Scenario 3 — resilience (node-b/c stopped, node-a reset cold)
+    Note over D,W: ── Scenario 3 — resilience (node-b/c stopped, node-a reset cold) ──
     D->>A: pull model.safetensors
     A-->>A: peer probe → peers unreachable
     A->>W: fall back to CDN
     W-->>A: bytes
     A-->>D: bytes (sha == truth)
     Note right of A: wan_bytes↑, peer_bytes 0<br/>node-a now WARM
-    end
 
-    rect rgb(235,255,235)
-    Note over D,A: Scenario 4 — cross-revision dedup (peers still down, node-a warm)
+    Note over D,A: ── Scenario 4 — cross-revision dedup (peers still down, node-a warm) ──
     D->>A: pull SAME file at a different, byte-identical revision
     A-->>A: reconstruct from cached xorbs (same Xet identity)
     A-->>D: bytes (sha == truth)
     Note right of A: hits↑, wan_bytes 0, peer_bytes 0
-    end
 ```
 
 ## What it asserts

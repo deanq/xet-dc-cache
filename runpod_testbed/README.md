@@ -66,9 +66,9 @@ flowchart TB
     scrape -.-> pc
     scrape --> report
 
-    classDef pod fill:#e6f2ff,stroke:#0366d6;
-    classDef ext fill:#fff5e6,stroke:#d9822b;
-    classDef warn fill:#fff0f0,stroke:#d9534f;
+    classDef pod fill:#bcd8ff,stroke:#1f6feb,stroke-width:1.5px,color:#0b1f33;
+    classDef ext fill:#ffd9a8,stroke:#bf6a00,stroke-width:1.5px,color:#3d2600;
+    classDef warn fill:#ffc9c9,stroke:#c92a2a,stroke-width:1.5px,color:#4d0f0f;
     class pa,pb,pc pod;
     class cdn ext;
     class wa warn;
@@ -103,17 +103,14 @@ sequenceDiagram
     participant P as peer pods
     participant W as HF CDN (WAN)
 
-    rect rgb(255,245,230)
-    Note over D,W: Cold pass — one download per (group, model), caches empty
+    Note over D,W: ── Cold pass — one download per (group, model), caches empty ──
     D->>WA: job: download model a
     WA->>P: peer probe → miss (nobody warm yet)
     WA->>W: fetch xorbs over WAN
     W-->>WA: bytes
     Note right of WA: pod A: wan_bytes↑, misses↑<br/>pod A now warm for a,b
-    end
 
-    rect rgb(230,242,255)
-    Note over D,WC: Warm-burst pass — `burst` concurrent repeats per group
+    Note over D,WC: ── Warm-burst pass — `burst` concurrent repeats per group ──
     D->>WA: job: re-download model a (×burst)
     WA->>WA: served from pod A's OWN cache
     Note right of WA: hits↑, wan_bytes 0 → effective_hit_rate → 1.0
@@ -122,7 +119,6 @@ sequenceDiagram
     WC->>P: peer probe → pod A HAS it
     P-->>WC: bytes over the private peer channel
     Note right of WC: pod C: peer_bytes↑, wan_bytes 0<br/>(cross-pod peering, WAN avoided)
-    end
 
     Note over D,W: report.py then contrasts cold WAN cost vs warm hit-rate +<br/>peer_bytes to show the DC-local cache payoff
 ```

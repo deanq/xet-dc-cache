@@ -36,3 +36,25 @@ def test_report_ok_reflects_failures():
     assert r.ok() is True
     r.check("b", False, "boom")
     assert r.ok() is False
+
+
+def test_report_to_markdown_renders_result_checks_and_notes():
+    r = harness.Report()
+    r.check("s1 ok", True, "wan_bytes +42")
+    r.check("s2 bad", False)
+    r.note("WAN cold: 40.0s -> 2.5x faster")
+    md = r.to_markdown(model="org/m@main", scenarios=["peering", "snapshot"])
+    assert "RESULT: FAIL" in md          # any failed check -> FAIL
+    assert "1/2 checks passed" in md
+    assert "org/m@main" in md
+    assert "peering, snapshot" in md
+    assert "| s1 ok | PASS | wan_bytes +42 |" in md
+    assert "| s2 bad | FAIL |" in md
+    assert "WAN cold: 40.0s -> 2.5x faster" in md
+
+
+def test_report_note_does_not_affect_ok():
+    r = harness.Report()
+    r.check("only", True)
+    r.note("timing line")
+    assert r.ok() is True

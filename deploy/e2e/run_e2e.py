@@ -20,6 +20,19 @@ import os
 import sys
 
 
+def _write_report(rep, scenarios: list) -> None:
+    """Persist a shareable markdown report next to the demo's (data/), mirroring
+    demo-run: write the file and echo it to the console."""
+    from datetime import datetime
+    from harness import E2E_DIR, REV, SMOL_REPO
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = E2E_DIR.parent.parent / "data" / f"e2e-report-{ts}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    md = rep.to_markdown(model=f"{SMOL_REPO}@{REV}", scenarios=scenarios)
+    out.write_text(md)
+    print(f"\nwrote {out}")
+
+
 def main() -> int:
     from harness import COMPOSE, NODES, Report, reset_cache, sh, wait_healthy
     from scenarios import ORDER, parse_scenarios
@@ -47,6 +60,7 @@ def main() -> int:
                 fn(rep)
         print("== summary ==")
         print("RESULT:", "PASS" if rep.ok() else "FAIL")
+        _write_report(rep, selected)
         return 0 if rep.ok() else 1
     finally:
         if started:

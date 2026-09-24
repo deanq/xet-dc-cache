@@ -129,14 +129,21 @@ def run(rep: Report) -> None:
     print()
 
     # Timing summary: WAN cold pull vs LAN peer vs local cache, same file.
+    # Emitted to the console AND recorded on the report (rep.note) so the
+    # persisted markdown carries the headline speedup.
     gib = size / 2**30
-    print(f"== timing ({gib:.2f} GiB file, same bytes each pull) ==")
-    print(f"  WAN cold pull (s1):        {rate(size, dt_wan)}")
-    print(f"  peer warm hit (s2):        {rate(size, dt_peer)}"
-          f"   -> {dt_wan / max(dt_peer, 1e-6):.1f}x faster than WAN")
+    summary = [f"timing ({gib:.2f} GiB file, same bytes each pull):",
+               f"  WAN cold pull (s1):   {rate(size, dt_wan)}",
+               f"  peer warm hit (s2):   {rate(size, dt_peer)}"
+               f"   -> {dt_wan / max(dt_peer, 1e-6):.1f}x faster than WAN"]
     if dt_cache is not None:
-        print(f"  local cache hit (s4):      {rate(size, dt_cache)}"
-              f"   -> {dt_wan / max(dt_cache, 1e-6):.1f}x faster than WAN")
-    print("  (local loopback overstates LAN speed vs a real DC backbone, but"
-          " the direction — cache/peer >> WAN — is the point.)")
+        summary.append(f"  local cache hit (s4): {rate(size, dt_cache)}"
+                       f"   -> {dt_wan / max(dt_cache, 1e-6):.1f}x faster than WAN")
+    summary.append("  (local loopback overstates LAN speed vs a real DC backbone,"
+                   " but the direction — cache/peer >> WAN — is the point.)")
+    print(f"== {summary[0]} ==")
+    for line in summary[1:]:
+        print(line)
+    for line in summary:
+        rep.note(line)
     print()

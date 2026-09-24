@@ -93,11 +93,42 @@ def wait_healthy(nodes: "list | tuple | None" = None, timeout: float = 60.0) -> 
 class Report:
     def __init__(self) -> None:
         self.rows: list[tuple[str, bool, str]] = []
+        self.notes: list[str] = []  # freeform lines (e.g. timing) for the report
 
     def check(self, name: str, ok: bool, detail: str = "") -> None:
         self.rows.append((name, ok, detail))
         mark = "PASS" if ok else "FAIL"
         print(f"  [{mark}] {name}" + (f" -- {detail}" if detail else ""))
 
+    def note(self, text: str = "") -> None:
+        """Record a freeform line for the persisted report (does not print or
+        affect ok()). Scenarios use it to capture their timing summary."""
+        self.notes.append(text)
+
     def ok(self) -> bool:
         return all(ok for _, ok, _ in self.rows)
+
+    def to_markdown(self, *, model: str, scenarios: "list[str]") -> str:
+        """Render a shareable markdown report from the collected checks + notes,
+        mirroring the demo report's headline-first style."""
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+        n_pass = sum(1 for _, ok, _ in self.rows if ok)
+        result = "PASS" if self.ok() else "FAIL"
+        lines = [
+            f"# xet-dc-cache e2e report — {ts}",
+            "",
+            f"- **RESULT: {result}** ({n_pass}/{len(self.rows)} checks passed)",
+            f"- Primary model: {model}",
+            f"- Scenarios: {', '.join(scenarios)}",
+            "",
+        ]
+        if self.notes:
+            lines += ["## Timing", "", "```"]
+            lines += self.notes
+            lines += ["```", ""]
+        lines += ["## Checks", "", "| check | result | detail |", "|---|---|---|"]
+        for name, ok, detail in self.rows:
+            lines.append(f"| {name} | {'PASS' if ok else 'FAIL'} | {detail} |")
+        lines.append("")
+        return "\n".join(lines)

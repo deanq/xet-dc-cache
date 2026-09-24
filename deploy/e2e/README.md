@@ -32,7 +32,10 @@ E2E_SCENARIOS=peering,eviction uv run deploy/e2e/run_e2e.py
 ```
 
 The script builds the image, starts the stack, runs the selected scenarios,
-prints a PASS/FAIL summary, and tears the stack down.
+prints a PASS/FAIL summary, and tears the stack down. It also writes a dated,
+shareable markdown report to `data/e2e-report-<timestamp>.md` (headline result +
+timing + a per-check table) — parallel to the live serverless demo's
+`data/report-<runid>.md`.
 
 **Full-run download cost**: beyond the peering scenarios' SmolLM2 pulls
 (~3 GB, a few times), scenario #2 (`sharded`) pulls Qwen2.5-3B-Instruct twice

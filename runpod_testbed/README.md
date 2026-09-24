@@ -10,6 +10,128 @@ This directory uses an **underscore** package name, `runpod_testbed/`
 (importable as `runpod_testbed.*`), even though some design docs refer to it
 as `runpod-testbed`.
 
+## Architecture
+
+Unlike the local Docker e2e (`deploy/e2e/`, which runs the shim in containers
+on one host), this testbed runs on **real Runpod infrastructure**: the shim on
+CPU pods, and the HuggingFace clients on **Flash serverless workers** that pull
+*through* those pods. The host only orchestrates — it never downloads a model
+itself.
+
+```mermaid
+flowchart TB
+    subgraph hostbox["Host (operator laptop / CI)"]
+        drive["drive/run.py<br/>submits cold + warm-burst<br/>jobs to the 3 endpoints"]
+        scrape["harvest/scrape.py<br/>polls /metrics/prometheus"]
+        report["harvest/report.py<br/>latency + peering payoff"]
+    end
+
+    subgraph flash["Runpod Flash — queue-based serverless (QB)"]
+        ea["endpoint xet-dl-A"]
+        eb["endpoint xet-dl-B"]
+        ec["endpoint xet-dl-C"]
+        wa["worker A<br/>hf_hub_download<br/>⚠ force-upgrades hf_xet≥1.6.0<br/>on first call, else xorbs<br/>bypass the shim"]
+        wb["worker B"]
+        wc["worker C"]
+        ea --> wa
+        eb --> wb
+        ec --> wc
+    end
+
+    subgraph pods["Cache pods (CPU, same DC) — xetcache shim"]
+        pa["pod A :8000<br/>models a,b"]
+        pb["pod B :8000<br/>models b,c"]
+        pc["pod C :8000<br/>models c,a"]
+        pa <-->|"PEERS (public TCP)<br/>HEAD probe + range GET"| pb
+        pb <--> pc
+        pc <-->|peer channel| pa
+    end
+
+    cdn["HuggingFace<br/>Xet CAS + CDN (WAN)"]
+
+    drive -->|".run() job on queue"| ea
+    drive --> eb
+    drive --> ec
+
+    wa -->|"HF_ENDPOINT = pod A public addr"| pa
+    wb -->|"HF_ENDPOINT = pod B"| pb
+    wc -->|"HF_ENDPOINT = pod C"| pc
+
+    pa -.->|"miss ⇒ WAN"| cdn
+    pb -.->|"miss ⇒ WAN"| cdn
+    pc -.->|"miss ⇒ WAN"| cdn
+
+    scrape -.->|"GET /metrics"| pa
+    scrape -.-> pb
+    scrape -.-> pc
+    scrape --> report
+
+    classDef pod fill:#e6f2ff,stroke:#0366d6;
+    classDef ext fill:#fff5e6,stroke:#d9822b;
+    classDef warn fill:#fff0f0,stroke:#d9534f;
+    class pa,pb,pc pod;
+    class cdn ext;
+    class wa warn;
+```
+
+Two things make this path faithful to how real HF users pull models — and are
+easy to get wrong:
+
+- **`HF_ENDPOINT` interception, not a custom client.** Each Flash endpoint is
+  deployed with `HF_ENDPOINT` set to its paired pod's public address, so a stock
+  `hf_hub_download` on the worker transparently routes all traffic through the
+  shim. No image or client changes.
+- **The hf_xet force-upgrade.** Flash's base image ships `hf_xet 1.3.2`, which
+  fetches Xet xorbs *directly from the CAS* and ignores the shim's rewritten
+  URLs — silently bypassing the cache. The worker handler force-upgrades to
+  `hf_xet ≥ 1.6.0` on its first invocation so xorb bytes actually flow through
+  the pod. (Proper fix is upstream in Flash; see the memory note.)
+
+## How the workload runs
+
+`drive/run.py` expands `config.toml`'s `overlap` matrix into two passes. The
+overlap is deliberately arranged so every model lives on **two** pods
+(`A={a,b}`, `B={b,c}`, `C={c,a}`) — that is what creates cross-pod peer hits in
+the warm pass.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D as drive (host)
+    participant WA as worker A → pod A
+    participant WC as worker C → pod C
+    participant P as peer pods
+    participant W as HF CDN (WAN)
+
+    rect rgb(255,245,230)
+    Note over D,W: Cold pass — one download per (group, model), caches empty
+    D->>WA: job: download model a
+    WA->>P: peer probe → miss (nobody warm yet)
+    WA->>W: fetch xorbs over WAN
+    W-->>WA: bytes
+    Note right of WA: pod A: wan_bytes↑, misses↑<br/>pod A now warm for a,b
+    end
+
+    rect rgb(230,242,255)
+    Note over D,WC: Warm-burst pass — `burst` concurrent repeats per group
+    D->>WA: job: re-download model a (×burst)
+    WA->>WA: served from pod A's OWN cache
+    Note right of WA: hits↑, wan_bytes 0 → effective_hit_rate → 1.0
+
+    D->>WC: job: download model a (pod C is cold for a, pod A warm)
+    WC->>P: peer probe → pod A HAS it
+    P-->>WC: bytes over the private peer channel
+    Note right of WC: pod C: peer_bytes↑, wan_bytes 0<br/>(cross-pod peering, WAN avoided)
+    end
+
+    Note over D,W: report.py then contrasts cold WAN cost vs warm hit-rate +<br/>peer_bytes to show the DC-local cache payoff
+```
+
+The `report.py` output makes the payoff concrete. A representative live run:
+pod A `effective_hit_rate 1.0` (served ~9.4 GB entirely from its own warm
+cache), pod C `peer_bytes ~4.64 GB` (pulled a peer's bytes instead of the WAN),
+with total WAN eliminated in the tens of GB across the fleet.
+
 ## Prerequisites
 
 - `RUNPOD_API_KEY` with permission to create pods and deploy Flash endpoints.

@@ -24,6 +24,113 @@ SMOKE_REPO=org/model SMOKE_REV=main SMOKE_PATH=model.safetensors \
 The script builds the image, starts the stack, runs the scenarios, prints a
 PASS/FAIL summary, and tears the stack down.
 
+## Architecture
+
+Three shim containers peer over the Docker bridge; the driver on the host pulls
+models *through* them and reads each node's `/metrics` to prove where the bytes
+came from. Two URL spaces are in play at once (see "Networking model" below):
+the client follows **host-facing** rewritten URLs, while the shims reach each
+other by **container-facing** service name.
+
+```mermaid
+flowchart TB
+    subgraph host["Host (macOS / CI runner)"]
+        driver["driver: run_e2e.py<br/>runs hf_hub_download in a<br/>fresh subprocess per pull<br/>+ reads each node's /metrics"]
+    end
+
+    subgraph bridge["Docker bridge network"]
+        na["node-a :8001<br/>xetcache shim"]
+        nb["node-b :8002<br/>xetcache shim"]
+        nc["node-c :8003<br/>xetcache shim"]
+        na <-->|"PEERS / SELF_URL<br/>http://node-x:8000<br/>(HEAD probe + range GET)"| nb
+        nb <--> nc
+        nc <-->|peer channel| na
+    end
+
+    cdn["HuggingFace<br/>Xet CAS + CDN (WAN)"]
+
+    ca[("caches/a")]
+    cb[("caches/b")]
+    cc[("caches/c")]
+
+    driver -->|"HF_ENDPOINT +<br/>PUBLIC_BASE 127.0.0.1:800x"| na
+    driver --> nb
+    driver --> nc
+
+    na -.->|"miss ⇒ WAN"| cdn
+    nb -.->|"miss ⇒ WAN"| cdn
+    nc -.->|"miss ⇒ WAN"| cdn
+
+    na --- ca
+    nb --- cb
+    nc --- cc
+
+    classDef node fill:#e6f2ff,stroke:#0366d6;
+    classDef ext fill:#fff5e6,stroke:#d9822b;
+    class na,nb,nc node;
+    class cdn ext;
+```
+
+On a miss a shim first probes its peers over the private bridge (cheap LAN hop);
+only if no peer has the xorb does it fall back to the WAN CDN. Per-node caches
+are host bind-mounts (`caches/{a,b,c}`) so the driver can reset a node to "cold"
+between scenarios.
+
+## How the scenarios run
+
+Each scenario reshapes cache/peer state, does one pull, and asserts on the
+`/metrics` delta. State carries forward: scenario 2's peer hit works *because*
+scenario 1 left `node-c` warm.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D as driver (host)
+    participant A as node-a
+    participant C as node-c
+    participant W as HF CDN (WAN)
+
+    Note over A,C: all caches reset → cold
+    D->>W: ground-truth DIRECT pull (no shim) → record sha256
+
+    rect rgb(255,245,230)
+    Note over D,W: Scenario 1 — WAN fallback (node-c, peers cold)
+    D->>C: pull model.safetensors
+    C->>A: peer probe (HEAD) → miss
+    C->>W: fetch xorbs
+    W-->>C: bytes
+    C-->>D: bytes (sha == truth)
+    Note right of C: wan_bytes↑, peer_misses↑, peer_bytes 0<br/>node-c now WARM
+    end
+
+    rect rgb(230,242,255)
+    Note over D,C: Scenario 2 — peer warm hit (node-a cold, node-c warm)
+    D->>A: pull model.safetensors
+    A->>C: peer probe + range GET
+    C-->>A: bytes over LAN
+    A-->>D: bytes (sha == truth)
+    Note right of A: peer_bytes↑, wan_bytes 0 (peer displaced WAN)
+    end
+
+    rect rgb(255,235,235)
+    Note over D,W: Scenario 3 — resilience (node-b/c stopped, node-a reset cold)
+    D->>A: pull model.safetensors
+    A-->>A: peer probe → peers unreachable
+    A->>W: fall back to CDN
+    W-->>A: bytes
+    A-->>D: bytes (sha == truth)
+    Note right of A: wan_bytes↑, peer_bytes 0<br/>node-a now WARM
+    end
+
+    rect rgb(235,255,235)
+    Note over D,A: Scenario 4 — cross-revision dedup (peers still down, node-a warm)
+    D->>A: pull SAME file at a different, byte-identical revision
+    A-->>A: reconstruct from cached xorbs (same Xet identity)
+    A-->>D: bytes (sha == truth)
+    Note right of A: hits↑, wan_bytes 0, peer_bytes 0
+    end
+```
+
 ## What it asserts
 
 1. **WAN fallback** — a download through `node-c` while every peer is cold pulls

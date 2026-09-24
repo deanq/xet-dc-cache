@@ -6,7 +6,10 @@ dc = "EU-RO-1"                              # Runpod datacenter id to pin pods t
 registry = "docker.io/CHANGEME"             # your container registry
 cache_image = "CHANGEME/xet-cache-testbed:latest"  # image running the cache shim
 worker_cpu = "cpu5c-4-8"                    # Flash worker instance flavor
-worker_deps = ["huggingface_hub", "hf_xet"] # Python deps Flash installs on the worker
+# Pin newer than Flash's base image (which ships huggingface_hub 1.6.0 + hf_xet
+# 1.3.2): hf_xet 1.3.2 fetches Xet xorbs DIRECTLY from the CAS, ignoring the
+# shim's rewritten reconstruction URLs (bypasses the cache); >=1.6.0 honors them.
+worker_deps = ["huggingface_hub>=1.32.0", "hf_xet>=1.6.0"] # Python deps Flash installs on the worker
 container_disk_gb = 20   # CPU pods cap container disk at 20 GB; larger caches need a network volume
 scrape_interval_s = 5
 job_timeout_s = 600      # how long drive waits for one job (cold worker: boot + dep install + download)

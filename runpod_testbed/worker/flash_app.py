@@ -8,10 +8,14 @@ from runpod_flash import Endpoint, DataCenter
 # top-level sibling here — NOT importable as runpod_testbed.worker.timing.
 from timing import run_download, hf_download
 
-_DEPS = os.environ.get("WORKER_DEPS", "huggingface_hub,hf_xet").split(",")
+# Pin >= the versions that honor HF_ENDPOINT for Xet xorb fetches. Flash's base
+# image ships huggingface_hub 1.6.0 + hf_xet 1.3.2, and hf_xet 1.3.2 pulls xorbs
+# straight from the CAS (bypassing the shim); >=1.6.0 uses the rewritten URLs.
+_DEPS = os.environ.get("WORKER_DEPS", "huggingface_hub>=1.32.0,hf_xet>=1.6.0").split(",")
 _CPU = os.environ.get("WORKER_CPU", "cpu5c-4-8")
 _MAX = int(os.environ.get("WORKER_MAX", "4"))
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
+_UPGRADED: list = []  # once-flag for the runtime hf_xet upgrade workaround (test)
 
 def _mk(name: str, pod_addr: str):
     # The generated deployed handler (build_utils/handler_generator.py) resolves
@@ -22,6 +26,20 @@ def _mk(name: str, pod_addr: str):
     #      handler import → the worker exits 1 before any job runs; and
     #  (2) the handler must accept the input keys as kwargs, hence **payload.
     async def handler(**payload) -> dict:
+        # Flash's base image ships hf_xet 1.3.2, which fetches Xet xorbs DIRECTLY
+        # from the CAS and bypasses the shim — it ignores the reconstruction
+        # manifest's rewritten (HF_ENDPOINT) xorb URLs. WORKER_DEPS does not
+        # upgrade the base's pre-installed version, so force-upgrade once at first
+        # invocation, BEFORE huggingface_hub is first imported (timing.hf_download
+        # imports it lazily), so the new hf_xet takes effect. Verified end-to-end:
+        # hf_xet>=1.6.0 routes xorbs through the shim (served_bytes/hits GB-scale,
+        # cross-pod peering). Proper fix belongs upstream (Flash bumping hf_xet).
+        if not _UPGRADED:
+            import subprocess, sys
+            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade",
+                            "huggingface_hub>=1.32.0", "hf_xet>=1.6.0"],
+                           check=False, capture_output=True)
+            _UPGRADED.append(True)
         return run_download(payload, hf_download)
     # __name__ drives both the manifest function name and the getattr above, and
     # must be unique across A/B/C (the scanner rejects duplicate names). Rename

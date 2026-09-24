@@ -1,3 +1,5 @@
+import pytest
+
 import harness
 from scenarios import parse_scenarios, ORDER
 
@@ -10,6 +12,13 @@ def test_parse_scenarios_defaults_to_all():
 
 def test_parse_scenarios_selects_subset_and_trims():
     assert parse_scenarios("snapshot, eviction") == ["snapshot", "eviction"]
+
+
+def test_parse_scenarios_rejects_unknown_name():
+    # Fail secure: a typo must raise, not silently select zero scenarios
+    # (which would exit 0 with RESULT: PASS -- a false green for CI).
+    with pytest.raises(ValueError):
+        parse_scenarios("snpashot")
 
 
 def test_delta_subtracts_by_key():

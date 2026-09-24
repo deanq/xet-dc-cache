@@ -30,9 +30,10 @@ def main() -> int:
     try:
         print(f"scenarios: {', '.join(selected)}")
         print("== building + starting stack ==")
-        # Only wait on nodes actually defined in this compose stack today --
-        # NODES anticipates nodes (e.g. node-evict) that later scenarios add to
-        # docker-compose.yml themselves and bring up via their own bring_up().
+        # Only reset/wait on nodes actually defined in this compose stack, in
+        # case harness.NODES ever lists a node the compose file doesn't (a
+        # missing service would otherwise hang wait_healthy). Today all four
+        # (node-a/b/c + node-evict) are defined, so this filter is a no-op guard.
         active = sh(*COMPOSE, "config", "--services").stdout.split()
         for node in NODES:
             if node in active:

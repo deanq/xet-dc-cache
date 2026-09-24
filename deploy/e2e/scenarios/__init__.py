@@ -15,4 +15,12 @@ def parse_scenarios(env: str | None) -> list[str]:
     names = [n for n, _ in ORDER]
     if not env or not env.strip():
         return names
-    return [s.strip() for s in env.split(",") if s.strip()]
+    selected = [s.strip() for s in env.split(",") if s.strip()]
+    # Fail secure: an unknown/typo'd name must not silently select nothing.
+    # Without this, `E2E_SCENARIOS=snpashot` runs zero scenarios and still
+    # exits 0 (Report.ok() is all([]) == True) -- a false green for CI.
+    unknown = [s for s in selected if s not in names]
+    if unknown:
+        raise ValueError(
+            f"unknown E2E_SCENARIOS: {', '.join(unknown)}; valid: {', '.join(names)}")
+    return selected

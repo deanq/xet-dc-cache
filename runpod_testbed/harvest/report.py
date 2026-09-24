@@ -164,18 +164,16 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
     lines.append("")
 
     cs = coldstart(jobs)
+
+    def _fmt(v, spec: str) -> str:  # None-safe number formatting for the table
+        return format(v, spec) if v is not None else "n/a"
+
     lines.append("## Cold-start vs steady-state")
     lines.append("")
     lines.append(f"- Cold (first-invocation) jobs: {cs['n_cold']}")
-    lines.append(f"- Cold mean wall_seconds: "
-                 f"{cs['cold_mean_s']:.3f}" if cs["cold_mean_s"] is not None else
-                 "- Cold mean wall_seconds: n/a")
-    lines.append(f"- Warm mean wall_seconds: "
-                 f"{cs['warm_mean_s']:.3f}" if cs["warm_mean_s"] is not None else
-                 "- Warm mean wall_seconds: n/a")
-    lines.append(f"- Mean dep-upgrade ms: "
-                 f"{cs['dep_upgrade_ms']:.0f}" if cs["dep_upgrade_ms"] is not None else
-                 "- Mean dep-upgrade ms: n/a")
+    lines.append(f"- Cold mean wall_seconds: {_fmt(cs['cold_mean_s'], '.3f')}")
+    lines.append(f"- Warm mean wall_seconds: {_fmt(cs['warm_mean_s'], '.3f')}")
+    lines.append(f"- Mean dep-upgrade ms: {_fmt(cs['dep_upgrade_ms'], '.0f')}")
     lines.append("")
 
     lines.append("## Latency by phase")

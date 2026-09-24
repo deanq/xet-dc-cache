@@ -24,3 +24,7 @@ runpod_testbed/worker/.flash/
 
 # Flash CLI local state (created wherever `flash deploy` is invoked from)
 .flash/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store

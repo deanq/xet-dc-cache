@@ -3,7 +3,9 @@
 Run the shim on one linux DC host as a supervised systemd service. This is
 Step 1 of `docs/deployment-readiness-handoff.md` — the single-host canary. It
 does **not** decide fleet topology (per-host vs shared); that's Step 3, gated
-by the Step 2 locality study.
+by the Step 2 locality study. For the host-level vs DC-level trade-offs and the
+recommended default, see `docs/cache-topology.md` — this install guide is the
+topology-agnostic building block for either shape.
 
 ## What you get
 

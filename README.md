@@ -18,6 +18,10 @@ traffic flows through it. The shim serves cached xorb ranges from local disk;
 on a miss it can pull from a **sibling shim** over a private backbone (Tier 1.5)
 before paying the WAN cost of the CDN.
 
+> **Where should the shim run — one per host, or a shared pool per DC?** See
+> `docs/cache-topology.md` for the host-level vs DC-level trade-offs and the
+> recommended per-host-placement + peering default.
+
 ```mermaid
 flowchart LR
     subgraph DCA["Datacenter A"]
@@ -167,6 +171,8 @@ docs/        Design + reference prose (see below).
   exact resolve/reconstruction transforms, auth lifecycle, failure modes.
 - `docs/xet-cache-findings.md` — empirical results: whole-file dedup is the whole
   game; content-address verification is not achievable via the client API.
+- `docs/cache-topology.md` — host-level vs DC-level shim placement: trade-offs,
+  the per-host + peering default, storage/eviction sizing, and the go/no-go gate.
 - `docs/lfs-support-handoff.md` — proposed follow-up: add git-LFS caching to the Go shim.
 - `docs/superpowers/specs/2026-09-03-peer-transfer-optimization-design.md` — the
   tuned peer transport + adaptive hedge (bounded per-race slack vs. WAN) design.

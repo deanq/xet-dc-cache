@@ -312,6 +312,16 @@ make -C runpod_testbed report RUNID=<runid>
 Reads `data/jobs-<runid>.jsonl` + `data/pod-metrics-<runid>.parquet` and
 produces latency-by-phase and peering-payoff summaries.
 
+Each job's worker result also carries `cold_first_invocation` (bool, set on
+the very first invocation of a given Flash endpoint, before `_UPGRADED` is
+set — see `worker/flash_app.py`) and `dep_upgrade_ms` (wall time spent
+force-upgrading `hf_xet`/`huggingface_hub` on that cold call, 0 otherwise).
+`report.py`'s **"Cold-start vs steady-state"** section splits job wall times
+into cold (`cold_first_invocation=True`) vs warm buckets using these fields
+and reports the mean dep-upgrade cost paid once per endpoint — separating
+"the endpoint had to pip-upgrade before it could even see the shim" from the
+steady-state cache-hit numbers in "Latency by phase" below it.
+
 ### 11. Tear down
 
 ```bash

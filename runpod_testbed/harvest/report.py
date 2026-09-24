@@ -41,6 +41,27 @@ def headline(jobs: list) -> dict:
             "speedup": speedup}
 
 
+def coldstart(jobs: list) -> dict:
+    """Cold (first-invocation, dep-upgrade-paying) vs warm job wall times.
+
+    `drive/run.py` already persists the whole worker `result` dict via
+    `record()`, so `cold_first_invocation`/`dep_upgrade_ms` flow into the jobs
+    JSONL with no drive change needed.
+    """
+    cold, warm, dep_ms = [], [], []
+    for j in jobs:
+        res = j.get("result", {})
+        first = bool(res.get("cold_first_invocation"))
+        if first:
+            dep_ms.append(int(res.get("dep_upgrade_ms", 0)))
+        walls = [r["wall_seconds"] for r in res.get("results", []) if r.get("ok")]
+        (cold if first else warm).extend(walls)
+    return {"n_cold": len(cold),
+            "cold_mean_s": (sum(cold) / len(cold)) if cold else None,
+            "warm_mean_s": (sum(warm) / len(warm)) if warm else None,
+            "dep_upgrade_ms": (sum(dep_ms) / len(dep_ms)) if dep_ms else None}
+
+
 def _final_by_pod(rows, name):
     latest = {}
     for r in rows:
@@ -140,6 +161,21 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
                      f"(median wall {h['cold_median_s']:.2f}s → {h['warm_median_s']:.3f}s)")
     lines.append(f"- Jobs completed OK: {h['n_ok']}")
     lines.append(f"- Total bytes served: {h['total_bytes']}")
+    lines.append("")
+
+    cs = coldstart(jobs)
+    lines.append("## Cold-start vs steady-state")
+    lines.append("")
+    lines.append(f"- Cold (first-invocation) jobs: {cs['n_cold']}")
+    lines.append(f"- Cold mean wall_seconds: "
+                 f"{cs['cold_mean_s']:.3f}" if cs["cold_mean_s"] is not None else
+                 "- Cold mean wall_seconds: n/a")
+    lines.append(f"- Warm mean wall_seconds: "
+                 f"{cs['warm_mean_s']:.3f}" if cs["warm_mean_s"] is not None else
+                 "- Warm mean wall_seconds: n/a")
+    lines.append(f"- Mean dep-upgrade ms: "
+                 f"{cs['dep_upgrade_ms']:.0f}" if cs["dep_upgrade_ms"] is not None else
+                 "- Mean dep-upgrade ms: n/a")
     lines.append("")
 
     lines.append("## Latency by phase")

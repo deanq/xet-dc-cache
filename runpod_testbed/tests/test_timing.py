@@ -17,3 +17,14 @@ def test_time_one_captures_error():
 def test_run_download_iterates_models():
     out = run_download({"models": ["a", "b"]}, lambda m: (10, 0.01))
     assert [r["model"] for r in out["results"]] == ["a", "b"]
+
+def test_run_download_carries_coldstart_fields():
+    out = run_download({"models": ["a"]}, lambda m: (10, 0.01),
+                       cold_first_invocation=True, dep_upgrade_ms=1500)
+    assert out["cold_first_invocation"] is True
+    assert out["dep_upgrade_ms"] == 1500
+
+def test_run_download_defaults_warm():
+    out = run_download({"models": ["a"]}, lambda m: (10, 0.01))
+    assert out["cold_first_invocation"] is False
+    assert out["dep_upgrade_ms"] == 0

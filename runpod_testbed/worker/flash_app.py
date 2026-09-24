@@ -34,13 +34,19 @@ def _mk(name: str, pod_addr: str):
         # imports it lazily), so the new hf_xet takes effect. Verified end-to-end:
         # hf_xet>=1.6.0 routes xorbs through the shim (served_bytes/hits GB-scale,
         # cross-pod peering). Proper fix belongs upstream (Flash bumping hf_xet).
-        if not _UPGRADED:
+        import time
+        cold = not _UPGRADED
+        dep_upgrade_ms = 0
+        if cold:
             import subprocess, sys
+            t0 = time.monotonic()
             subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade",
                             "huggingface_hub>=1.32.0", "hf_xet>=1.6.0"],
                            check=False, capture_output=True)
+            dep_upgrade_ms = round((time.monotonic() - t0) * 1000)
             _UPGRADED.append(True)
-        return run_download(payload, hf_download)
+        return run_download(payload, hf_download,
+                            cold_first_invocation=cold, dep_upgrade_ms=dep_upgrade_ms)
     # __name__ drives both the manifest function name and the getattr above, and
     # must be unique across A/B/C (the scanner rejects duplicate names). Rename
     # BEFORE Endpoint wraps it (a post-decoration rename lands on the wrapper).

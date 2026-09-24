@@ -15,8 +15,11 @@ def time_one(download_fn, model: str) -> dict:
                 "wall_seconds": round(time.monotonic() - start, 3),
                 "ok": False, "error": str(e)}
 
-def run_download(payload: dict, download_fn) -> dict:
+def run_download(payload: dict, download_fn, *,
+                 cold_first_invocation: bool = False, dep_upgrade_ms: int = 0) -> dict:
     return {"worker_id": os.environ.get("RUNPOD_POD_ID", "unknown"),
+            "cold_first_invocation": cold_first_invocation,
+            "dep_upgrade_ms": dep_upgrade_ms,
             "results": [time_one(download_fn, m) for m in payload.get("models", [])]}
 
 def hf_download(model: str):

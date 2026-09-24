@@ -210,13 +210,6 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
         lines.append(f"- hedge_win_ratio: {payoff['hedge_win_ratio']:.4f}")
     lines.append("")
 
-    lines.append("## Cost note")
-    lines.append("")
-    lines.append("TODO(dean, 2026-09-18): pull per-pod GPU-hour billing and WAN egress "
-                  "pricing once Runpod cost-export API access is confirmed; not available "
-                  "at report-generation time.")
-    lines.append("")
-
     out_path = f"data/report-{runid}.md"
     with open(out_path, "w") as fh:
         fh.write("\n".join(lines))

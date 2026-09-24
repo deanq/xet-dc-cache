@@ -1,4 +1,15 @@
 import harness
+from scenarios import parse_scenarios, ORDER
+
+
+def test_parse_scenarios_defaults_to_all():
+    names = [n for n, _ in ORDER]
+    assert parse_scenarios(None) == names
+    assert parse_scenarios("") == names
+
+
+def test_parse_scenarios_selects_subset_and_trims():
+    assert parse_scenarios("snapshot, eviction") == ["snapshot", "eviction"]
 
 
 def test_delta_subtracts_by_key():

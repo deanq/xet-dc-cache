@@ -31,7 +31,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,7 +56,7 @@ NODES = {"node-a": 8001, "node-b": 8002, "node-c": 8003}
 # fixes cache/endpoint at import, so every download must be its own process with
 # its own HF_HOME to actually go over the wire through the chosen shim.
 # --------------------------------------------------------------------------
-def worker(repo: str, rev: str, filename: str, endpoint: str, out: str) -> None:
+def worker(repo: str, rev: str, filename: str, endpoint: str) -> None:
     with tempfile.TemporaryDirectory() as hf_home:
         os.environ["HF_HOME"] = hf_home
         os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -66,9 +65,10 @@ def worker(repo: str, rev: str, filename: str, endpoint: str, out: str) -> None:
         from huggingface_hub import hf_hub_download
 
         path = hf_hub_download(repo_id=repo, filename=filename, revision=rev)
-        h = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-        shutil.copy(path, out)
-        print(h)
+        # The sha256 is all the caller needs (byte-identity check); it is computed
+        # here and the download is discarded with hf_home. Do NOT copy the file
+        # out -- persisting a multi-GB copy per scenario blows out client disk.
+        print(hashlib.sha256(Path(path).read_bytes()).hexdigest())
 
 
 # --------------------------------------------------------------------------
@@ -78,14 +78,14 @@ def sh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(args, check=check, capture_output=True, text=True)
 
 
-def download(endpoint: str, out: Path, rev: str = REV) -> str:
+def download(endpoint: str, rev: str = REV) -> str:
     """Run a download in a subprocess; returns the file's sha256.
 
     rev defaults to REV; pass an explicit revision for the cross-revision
     scenario (same file at a different commit).
     """
     proc = subprocess.run(
-        [sys.executable, __file__, "--worker", REPO, rev, FILE, endpoint, str(out)],
+        [sys.executable, __file__, "--worker", REPO, rev, FILE, endpoint],
         capture_output=True,
         text=True,
     )
@@ -94,10 +94,10 @@ def download(endpoint: str, out: Path, rev: str = REV) -> str:
     return proc.stdout.strip().splitlines()[-1]
 
 
-def timed_download(endpoint: str, out: Path, rev: str = REV) -> tuple[str, float]:
+def timed_download(endpoint: str, rev: str = REV) -> tuple[str, float]:
     """Like download(), but also returns wall-clock seconds for the transfer."""
     t0 = time.monotonic()
-    sha = download(endpoint, out, rev)
+    sha = download(endpoint, rev)
     return sha, time.monotonic() - t0
 
 
@@ -180,7 +180,6 @@ class Report:
 
 def main() -> int:
     rep = Report()
-    truth_dir = Path(tempfile.mkdtemp(prefix="xet-e2e-"))
     started = False
     try:
         print(f"model: {REPO}@{REV} :: {FILE}")
@@ -194,13 +193,13 @@ def main() -> int:
 
         # Ground truth: a direct (no-shim) download to compare bytes against.
         print("== ground truth (direct download) ==")
-        truth = download("DIRECT", truth_dir / "truth.bin")
+        truth = download("DIRECT")
         print(f"  sha256 = {truth[:16]}...\n")
 
         # Scenario 1: WAN fallback through node-c (cluster is cold everywhere).
         print("== scenario 1: WAN fallback (node-c, all peers cold) ==")
         before = metrics(8003)
-        sha, dt_wan = timed_download("http://127.0.0.1:8003", truth_dir / "s1.bin")
+        sha, dt_wan = timed_download("http://127.0.0.1:8003")
         after = metrics(8003)
         d_wan = delta(before, after, "wan_bytes")
         size = d_wan  # full-file transfer size, reused for throughput below
@@ -216,7 +215,7 @@ def main() -> int:
         # Scenario 2: peer warm hit through node-a (node-c is now warm).
         print("== scenario 2: peer warm hit (node-a, node-c warm) ==")
         before = metrics(8001)
-        sha, dt_peer = timed_download("http://127.0.0.1:8001", truth_dir / "s2.bin")
+        sha, dt_peer = timed_download("http://127.0.0.1:8001")
         after = metrics(8001)
         d_peer_bytes = delta(before, after, "peer_bytes")
         d_wan = delta(before, after, "wan_bytes")
@@ -235,7 +234,7 @@ def main() -> int:
         sh(*COMPOSE, "stop", "node-b", "node-c")
         reset_cache("node-a")
         before = metrics(8001)
-        sha = download("http://127.0.0.1:8001", truth_dir / "s3.bin")
+        sha = download("http://127.0.0.1:8001")
         after = metrics(8001)
         d_wan = delta(before, after, "wan_bytes")
         d_peer_bytes = delta(before, after, "peer_bytes")
@@ -257,7 +256,7 @@ def main() -> int:
                       f"{REPO} has only one commit")
         else:
             before = metrics(8001)
-            sha, dt_cache = timed_download("http://127.0.0.1:8001", truth_dir / "s4.bin", rev=other)
+            sha, dt_cache = timed_download("http://127.0.0.1:8001", rev=other)
             after = metrics(8001)
             d_wan = delta(before, after, "wan_bytes")
             d_hits = delta(before, after, "hits")
@@ -289,7 +288,6 @@ def main() -> int:
         print("RESULT:", "PASS" if rep.ok() else "FAIL")
         return 0 if rep.ok() else 1
     finally:
-        shutil.rmtree(truth_dir, ignore_errors=True)
         if started:
             sh(*COMPOSE, "down", check=False)
 

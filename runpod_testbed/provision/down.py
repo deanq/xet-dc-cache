@@ -13,12 +13,12 @@ ENDPOINTS = ("xet-dl-A", "xet-dl-B", "xet-dl-C")
 _WORKER_DIR = "runpod_testbed/worker"
 
 
-def cli_undeploy(env_name: str) -> None:
+def cli_undeploy(env_name: str, names: tuple[str, ...] = ENDPOINTS) -> None:
     # `flash undeploy` deletes by endpoint name (there is no --env); --all would
     # nuke unrelated endpoints in the account. Tolerate not-found per endpoint
     # (teardown-on-failure often runs before deploy created them). env_name is
     # unused by the CLI but kept for the teardown(flash_undeploy=...) contract.
-    for name in ENDPOINTS:
+    for name in names:
         subprocess.run(["flash", "undeploy", name, "--force"],
                        cwd=_WORKER_DIR, check=False)
 

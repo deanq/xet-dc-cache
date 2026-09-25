@@ -1,6 +1,9 @@
+import pytest
+
 from runpod_testbed.worker.timing import time_one, run_download
 from runpod_testbed.worker.timing import EMPTY_BREAKDOWN, make_timing_row, schema_phase
 from runpod_testbed.worker.timing import volumecache_download
+from runpod_testbed.worker.timing import MODELSTORE_ROOT, modelstore_local_read, modelstore_snapshot_dir
 
 def test_time_one_records_bytes_and_timing():
     out = time_one(lambda m: (1_000_000, 0.5), "org/x@main")
@@ -113,3 +116,47 @@ def test_volumecache_download_defaults_hf_home_from_env(monkeypatch):
     monkeypatch.setenv("HF_HOME", "/root/.cache/huggingface")
     volumecache_download("m", download_fn=lambda m: (1, 0.0), cache_factory=_FakeVolumeCache)
     assert _FakeVolumeCache.instances[0].dirs == ["/root/.cache/huggingface"]
+
+
+def _stage(root, org="org", name="x", rev="main", sha="abc123", files=(("model.safetensors", 1000), ("config.json", 24))):
+    base = root / f"models--{org}--{name}"
+    snap = base / "snapshots" / sha
+    snap.mkdir(parents=True)
+    for fname, size in files:
+        (snap / fname).write_bytes(b"\0" * size)
+    if rev:
+        (base / "refs").mkdir()
+        (base / "refs" / rev).write_text(sha + "\n")
+    return snap
+
+
+def test_snapshot_dir_follows_refs_then_falls_back_to_single_snapshot(tmp_path):
+    snap = _stage(tmp_path)
+    assert modelstore_snapshot_dir("org/x@main", str(tmp_path)) == snap
+    snap2 = _stage(tmp_path, name="y", rev=None, sha="deadbeef")
+    assert modelstore_snapshot_dir("org/y@main", str(tmp_path)) == snap2
+
+
+def test_snapshot_dir_errors_when_model_not_staged(tmp_path):
+    with pytest.raises(FileNotFoundError, match="org/missing@main"):
+        modelstore_snapshot_dir("org/missing@main", str(tmp_path))
+
+
+def test_local_read_reports_bytes_and_breakdown(tmp_path):
+    _stage(tmp_path)
+    nbytes, local_read_s, bd = modelstore_local_read("org/x@main", root=str(tmp_path))
+    assert nbytes == 1024 and local_read_s >= 0
+    assert set(bd) == {"local_read_s"} and MODELSTORE_ROOT == "/runpod-volume/huggingface-cache/hub"
+
+
+def test_local_read_errors_on_empty_snapshot(tmp_path):
+    _stage(tmp_path, files=())
+    with pytest.raises(FileNotFoundError, match="no files"):
+        modelstore_local_read("org/x@main", root=str(tmp_path))
+
+
+def test_local_read_rejects_model_mismatch_with_endpoint(tmp_path, monkeypatch):
+    _stage(tmp_path)
+    monkeypatch.setenv("MODEL", "org/other@main")
+    with pytest.raises(ValueError, match="org/other@main"):
+        modelstore_local_read("org/x@main", root=str(tmp_path))

@@ -77,6 +77,45 @@ def volumecache_download(model: str, *, download_fn=None, cache_factory=None,
             {"hydrate_s": round(hydrate_s, 3), "download_s": round(download_s, 3)})
 
 
+MODELSTORE_ROOT = "/runpod-volume/huggingface-cache/hub"
+_DEFAULT_REV = "main"
+
+
+def modelstore_snapshot_dir(model: str, root: str) -> Path:
+    """Runpod cached-model layout mirrors HF_HOME/hub: models--{org}--{name}/snapshots/{hash}."""
+    repo, _, rev = model.partition("@")
+    org, _, name = repo.partition("/")
+    base = Path(root) / f"models--{org}--{name}"
+    ref = base / "refs" / (rev or _DEFAULT_REV)
+    if ref.is_file():
+        return base / "snapshots" / ref.read_text().strip()
+    snapshots = base / "snapshots"
+    dirs = sorted(p for p in snapshots.iterdir() if p.is_dir()) if snapshots.is_dir() else []
+    if len(dirs) == 1:
+        return dirs[0]
+    raise FileNotFoundError(
+        f"model {model}: expected refs/{rev or _DEFAULT_REV} or exactly one snapshot under "
+        f"{snapshots} (found {len(dirs)}) — is the cached model declared on this "
+        f"endpoint and finished staging?")
+
+
+def modelstore_local_read(model: str, root: str | None = None):
+    """Model Store path: the platform staged the weights before the handler ran;
+    assert they are present and time the local walk. No HF download."""
+    expected = os.environ.get("MODEL")
+    if expected and expected != model:
+        raise ValueError(f"job asked for {model} but this endpoint caches {expected}")
+    root = root or os.environ.get("MODELSTORE_ROOT", MODELSTORE_ROOT)
+    t0 = time.monotonic()
+    snap = modelstore_snapshot_dir(model, root)
+    files = [f for f in snap.rglob("*") if f.is_file()]
+    if not files:
+        raise FileNotFoundError(f"model {model}: snapshot {snap} has no files")
+    total = sum(f.stat().st_size for f in files)
+    local_read_s = time.monotonic() - t0
+    return (total, local_read_s, {"local_read_s": round(local_read_s, 3)})
+
+
 def schema_phase(job_phase: str) -> str:
     return _PHASE_ALIAS.get(job_phase, job_phase)
 

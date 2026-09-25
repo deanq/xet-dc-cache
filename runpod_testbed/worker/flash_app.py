@@ -6,7 +6,7 @@ from runpod_flash import Endpoint, DataCenter
 from runpod_flash.core.resources.network_volume import NetworkVolume
 # Flash packages this worker/ dir as the deploy root, so timing.py / plan.py are
 # top-level siblings here — NOT importable as runpod_testbed.worker.*.
-from timing import run_download, hf_download, volumecache_download
+from timing import run_download, hf_download, volumecache_download, modelstore_local_read
 from plan import plan_endpoints
 
 # Pin >= the versions that honor HF_ENDPOINT for Xet xorb fetches. Flash's base
@@ -24,9 +24,8 @@ _MECHANISM = os.environ.get("MECHANISM", "shim")
 _MODELS = [m for m in os.environ.get("MODELS", "").split(",") if m]
 _UPGRADED: list = []  # once-flag for the runtime hf_xet upgrade workaround
 
-# Tasks 15 / 18 replace the last two with volumecache_download / modelstore_local_read.
 _DOWNLOADERS = {"shim": hf_download, "baseline": hf_download,
-                "volumecache": volumecache_download, "modelstore": hf_download}
+                "volumecache": volumecache_download, "modelstore": modelstore_local_read}
 
 
 def _upgrade_hf_once() -> tuple[bool, int]:

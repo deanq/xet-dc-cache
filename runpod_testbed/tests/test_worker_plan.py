@@ -1,7 +1,7 @@
 import pytest
 
 from runpod_testbed.worker.plan import (
-    HF_HOME_DEFAULT, EndpointPlan, needs_hf_upgrade, plan_endpoints, upgrade_pkgs)
+    HF_HOME_DEFAULT, EndpointPlan, gpu_names, needs_hf_upgrade, plan_endpoints, upgrade_pkgs)
 
 MODELS = ["org/a@main", "org/b@main"]
 
@@ -75,3 +75,12 @@ def test_upgrade_pkgs_adds_runpod_only_for_volumecache():
     vc = upgrade_pkgs("volumecache")
     assert any("huggingface_hub" in p for p in vc)
     assert any(p.startswith("runpod>=") for p in vc)  # VolumeCache via runpod-python
+
+
+def test_gpu_names_empty_when_unset_or_blank():
+    assert gpu_names({}) == []
+    assert gpu_names({"WORKER_GPU": ""}) == []
+
+
+def test_gpu_names_splits_and_strips_comma_list():
+    assert gpu_names({"WORKER_GPU": "AMPERE_16, ADA_24"}) == ["AMPERE_16", "ADA_24"]

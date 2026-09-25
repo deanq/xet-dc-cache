@@ -10,6 +10,11 @@ worker_cpu = "cpu5c-4-8"                    # Flash worker instance flavor (CPU 
 # 1.3.2): hf_xet 1.3.2 fetches Xet xorbs DIRECTLY from the CAS, ignoring the
 # shim's rewritten reconstruction URLs (bypasses the cache); >=1.6.0 honors them.
 worker_deps = ["huggingface_hub>=1.32.0", "hf_xet>=1.6.0"]
+# Empty (default) = CPU worker_cpu above. Non-empty = comma-list of GpuGroup/
+# GpuType enum NAMES (e.g. "AMPERE_16,ADA_24"); deploys a GPU endpoint instead
+# (gpu_count is always 1). Needed for mechanism = "modelstore": Model Store
+# staging is GPU-only. Other mechanisms (shim, volumecache) stay CPU.
+worker_gpu = ""
 container_disk_gb = 20   # CPU pods cap container disk at 20 GB; larger caches need a network volume
 scrape_interval_s = 5
 job_timeout_s = 600      # how long drive waits for one job (cold worker: boot + dep install + download)

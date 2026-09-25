@@ -25,6 +25,12 @@ _HF_PKGS = ("huggingface_hub>=1.32.0", "hf_xet>=1.6.0")
 _RUNPOD_PKG = "runpod>=1.12.0"  # first version exposing runpod.serverless.VolumeCache
 
 
+def gpu_names(env: Mapping[str, str]) -> list[str]:
+    """Comma-separated WORKER_GPU env var -> list of GpuGroup/GpuType enum
+    names. Empty/unset -> [] (flash_app then deploys a CPU endpoint)."""
+    return [n.strip() for n in env.get("WORKER_GPU", "").split(",") if n.strip()]
+
+
 def needs_hf_upgrade(downloader: str) -> bool:
     return downloader not in _NO_HF_DOWNLOADERS
 

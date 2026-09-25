@@ -140,3 +140,14 @@ def test_mechanism_override_wins_over_toml():
     cfg = load_str(VALID_SHIM_SUBTABLE.replace("[shim]", "[volumecache]\nvolume_gb = 20\n[shim]"),
                    mechanism_override="volumecache")
     assert cfg.mechanism == "volumecache" and cfg.volume_gb == 20
+
+
+def test_worker_gpu_defaults_to_empty_string():
+    assert load_str(VALID).worker_gpu == ""
+
+
+def test_worker_gpu_loads_from_toml():
+    # Insert before [overlap] -- appending after it would land inside that
+    # TOML table instead of at the top level.
+    cfg = load_str(VALID.replace("[overlap]", 'worker_gpu = "AMPERE_16"\n[overlap]'))
+    assert cfg.worker_gpu == "AMPERE_16"

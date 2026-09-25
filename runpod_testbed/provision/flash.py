@@ -24,6 +24,7 @@ def deploy_env(spec: WorkerSpec, cfg, hf_token: str, runid: str) -> dict[str, st
         "MODELS": ",".join(cfg.models),
         "HF_TOKEN": hf_token,
         "WORKER_CPU": cfg.worker_cpu,
+        "WORKER_GPU": cfg.worker_gpu,
         "WORKER_DEPS": ",".join(spec.deps or cfg.worker_deps),
         "WORKER_MAX": str(cfg.burst),
         "FLASH_ENV": f"xet-{runid}",

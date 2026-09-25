@@ -137,6 +137,11 @@ def test_snapshot_dir_follows_refs_then_falls_back_to_single_snapshot(tmp_path):
     assert modelstore_snapshot_dir("org/y@main", str(tmp_path)) == snap2
 
 
+def test_snapshot_dir_resolves_case_insensitively(tmp_path):
+    snap = _stage(tmp_path, org="OpenAI", name="GPT2", rev="main", sha="cafef00d")
+    assert modelstore_snapshot_dir("openai/gpt2@main", str(tmp_path)) == snap
+
+
 def test_snapshot_dir_errors_when_model_not_staged(tmp_path):
     with pytest.raises(FileNotFoundError, match="org/missing@main"):
         modelstore_snapshot_dir("org/missing@main", str(tmp_path))

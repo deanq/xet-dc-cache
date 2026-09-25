@@ -19,7 +19,7 @@ def test_identity_spec_and_no_metrics():
     m = ModelStoreMechanism()
     assert m.name == "modelstore" and m.has_metrics() is False
     assert m.worker_spec(load_str(_MS)) == WorkerSpec(handler="modelstore")
-    assert m.report_sections([], []) == []
+    assert m.report_sections([], [], None) == []
 
 
 def test_jobs_are_warm_only_per_model_endpoint():

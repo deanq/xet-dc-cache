@@ -57,5 +57,5 @@ class VolumeCacheMechanism:
         # The volume itself is deleted by down.teardown_all from state.volumes.
         (flash_undeploy or cli_undeploy)(f"xet-{state.runid}", names=(endpoint_name(VOLUME_LABEL),))
 
-    def report_sections(self, jobs: list, metrics_rows: list) -> list[str]:
+    def report_sections(self, jobs: list, metrics_rows: list, state) -> list[str]:
         return []

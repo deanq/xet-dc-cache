@@ -23,7 +23,8 @@ def test_registered_mechanism_conforms_to_protocol(name):
     for meth in _METHODS:
         assert callable(getattr(m, meth)), meth
     assert isinstance(m.has_metrics(), bool)
-    assert m.report_sections([], []) == [] or all(isinstance(s, str) for s in m.report_sections([], []))
+    assert (m.report_sections([], [], None) == []
+            or all(isinstance(s, str) for s in m.report_sections([], [], None)))
 
 
 @pytest.mark.parametrize("name", sorted(MECHANISMS))

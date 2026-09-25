@@ -98,5 +98,5 @@ class ModelStoreMechanism:
         if owned:
             (flash_undeploy or cli_undeploy)(f"xet-{state.runid}", names=tuple(owned))
 
-    def report_sections(self, jobs: list, metrics_rows: list) -> list[str]:
+    def report_sections(self, jobs: list, metrics_rows: list, state) -> list[str]:
         return []

@@ -133,45 +133,165 @@ def headline_vs_baseline(rows: list) -> dict:
             "speedup": speedup}
 
 
-def _fmt(v, spec: str) -> str:  # None-safe number formatting
-    return format(v, spec) if v is not None else "n/a"
+# --- formatting helpers (human-readable units; no raw byte/fraction dumps) ---
+
+_SUBSECOND_THRESHOLD_S = 1.0
+_BYTES_PER_MB = 1_000_000
+_BYTES_PER_GB = 1_000_000_000
+_POD_ID_SHORT_CHARS = 6
+_MS_PER_SECOND = 1000
+_RUNID_FORMAT = "%Y%m%d-%H%M%S"
 
 
-def _headline_lines(jobs: list) -> list[str]:
+def format_seconds(seconds) -> str:  # None-safe; sub-second gets more precision
+    if seconds is None:
+        return "n/a"
+    if abs(seconds) < _SUBSECOND_THRESHOLD_S:
+        return f"{seconds:.2f}s"
+    return f"{seconds:.1f}s"
+
+
+_BYTES_PER_KB = 1_000
+
+
+def format_bytes(n) -> str:  # None-safe; decimal KB/MB/GB, always labeled
+    if n is None:
+        return "n/a"
+    if abs(n) < _BYTES_PER_KB:
+        return f"{n:.0f} B"
+    if abs(n) < _BYTES_PER_MB:
+        return f"{n / _BYTES_PER_KB:.0f} KB"
+    if abs(n) < _BYTES_PER_GB:
+        return f"{n / _BYTES_PER_MB:.1f} MB"
+    return f"{n / _BYTES_PER_GB:.1f} GB"
+
+
+def format_percent(fraction) -> str:  # None-safe; 0.9 -> "90%"
+    if fraction is None:
+        return "n/a"
+    return f"{fraction * 100:.0f}%"
+
+
+def pod_label(pod_id: str, state) -> str:
+    """Friendly label for a metrics 'pod' value: look it up in
+    ProvisionState.pods (label -> raw pod id, inverted); fall back to a short
+    id if the run has no state or the id isn't known."""
+    if state is not None:
+        for label, pid in state.pods.items():
+            if pid == pod_id:
+                return f"pod {label}"
+    return f"pod {pod_id[:_POD_ID_SHORT_CHARS]}"
+
+
+def _run_datetime(runid: str) -> str:
+    from datetime import datetime
+    try:
+        return datetime.strptime(runid, _RUNID_FORMAT).strftime("%Y-%m-%d %H:%M")
+    except ValueError:  # unexpected runid shape -- show it verbatim rather than crash
+        return runid
+
+
+def _model_names(jobs: list) -> list[str]:
+    names = (r["model"].split("@", 1)[0].split("/", 1)[-1] for r in timing_rows(jobs))
+    return list(dict.fromkeys(names))
+
+
+def _fleet_description(state) -> str:
+    from runpod_testbed.mechanisms.base import BASELINE_LABEL
+    if state is None:
+        return "no pods/endpoints recorded"
+    if state.pods:
+        n = len(state.pods)
+        return f"{n} cache pod{'s' if n != 1 else ''}"
+    owned = [k for k in state.endpoints if k != BASELINE_LABEL]
+    if owned:
+        return f"{len(owned)} endpoint{'s' if len(owned) != 1 else ''}"
+    return "no pods/endpoints recorded"
+
+
+def _header_lines(runid: str, mechanism: str, jobs: list, state) -> list[str]:
+    models = _model_names(jobs)
+    model_str = ", ".join(models) if models else "no models recorded"
+    return [f"# Cache testbed report — {mechanism}", "",
+            f"**{_run_datetime(runid)} · models: {model_str} · {_fleet_description(state)}**", ""]
+
+
+def _one_line_lines(jobs: list, metrics_rows: list) -> list[str]:
+    """Plain-English money paragraph: cold time, warm time, speedup, and (if
+    this run has peering data) what fraction of miss bytes came from a peer."""
     h = headline_vs_baseline(timing_rows(jobs))
-    lines = ["## Headline", ""]
+    lines = ["## In one line", ""]
+    if h["speedup"] is None:
+        lines += ["_Not enough data yet to compute a baseline→warm speedup "
+                  "(need at least one baseline run and one warm run)._", ""]
+        return lines
+    sentence = (f"A cold model download took **{format_seconds(h['baseline_median_s'])}**; "
+                f"once the cache was warm, repeat pulls took **{format_seconds(h['warm_median_s'])}** "
+                f"— **{h['speedup']:.1f}× faster**.")
+    payoff = peering_payoff(metrics_rows) if metrics_rows else None
+    if payoff and (payoff["peer_bytes"] or payoff["wan_bytes"]):
+        sentence += (f" **{format_percent(payoff['peer_fraction'])} of cache-miss bytes came from a "
+                     f"neighboring cache pod** over the datacenter backbone instead of the public internet.")
+    lines += [sentence, ""]
+    return lines
+
+
+_BASELINE_PHASE_DESC = "naive pull straight from HuggingFace (no cache)"
+_PHASE_DESCRIPTIONS = {
+    "shim": {"populate": "first pull, fills the cache",
+             "warm": "pull through a cache that already has it"},
+    "volumecache": {"populate": "first pull, fills the volume",
+                     "warm": "later pull, restored from the volume"},
+    "modelstore": {"warm": "pull from the platform's pre-staged model cache"},
+}
+
+
+def _phase_description(mechanism: str, phase: str) -> str:
+    if phase == "baseline":
+        return _BASELINE_PHASE_DESC
+    return _PHASE_DESCRIPTIONS.get(mechanism, {}).get(phase, phase)
+
+
+def _cold_vs_warm_lines(mechanism: str, jobs: list) -> list[str]:
+    lat = latency_by_schema_phase(timing_rows(jobs))
+    if not lat:
+        return ["## Cold vs warm", "", "_No timing data captured for this run._", ""]
+    lines = ["## Cold vs warm", "",
+             "| stage | what it measures | runs | median | data |", "|---|---|---|---|---|"]
+    for phase in SCHEMA_PHASES:
+        if phase not in lat:
+            continue
+        d = lat[phase]
+        lines.append(f"| {phase} | {_phase_description(mechanism, phase)} | {d['n']} | "
+                     f"{format_seconds(d['median_s'])} | {format_bytes(d['total_bytes'])} |")
+    h = headline_vs_baseline(timing_rows(jobs))
+    lines.append("")
     if h["speedup"] is not None:
-        lines.append(f"- **Baseline→warm speedup: {h['speedup']:.1f}× faster** "
-                     f"(median wall {h['baseline_median_s']:.2f}s → {h['warm_median_s']:.3f}s)")
-    legacy = headline(jobs)   # shim-only cold→warm (kept for continuity with older reports)
-    if legacy["speedup"] is not None:
-        lines.append(f"- Cold→warm speedup (legacy, handler wall): {legacy['speedup']:.1f}×")
-    lines += [f"- Jobs completed OK: {h['n_ok']}", f"- Total bytes served: {h['total_bytes']}", ""]
+        lines += [f"_Warm reads are **{h['speedup']:.1f}×** faster than going to HuggingFace._", ""]
     return lines
 
 
 def _coldstart_lines(jobs: list) -> list[str]:
     cs = coldstart(jobs)
-    return ["## Cold-start vs steady-state", "",
-            f"- Cold (first-invocation) jobs: {cs['n_cold']}",
-            f"- Cold mean wall_seconds: {_fmt(cs['cold_mean_s'], '.3f')}",
-            f"- Warm mean wall_seconds: {_fmt(cs['warm_mean_s'], '.3f')}",
-            f"- Mean dep-upgrade ms: {_fmt(cs['dep_upgrade_ms'], '.0f')}", ""]
+    if cs["n_cold"] == 0:
+        return ["## Cold start", "", "_No cold-start (first-invocation) jobs recorded this run._", ""]
+    lines = ["## Cold start", "",
+             f"**{cs['n_cold']}** job(s) hit a genuine cold start (first invocation on a fresh worker) "
+             "this run.",
+             f"Cold jobs averaged **{format_seconds(cs['cold_mean_s'])}**; "
+             f"warm jobs averaged **{format_seconds(cs['warm_mean_s'])}**."]
+    if cs["dep_upgrade_ms"]:
+        lines.append(f"Installing dependencies on that cold worker added "
+                     f"**{cs['dep_upgrade_ms'] / _MS_PER_SECOND:.1f}s** on average.")
+    lines.append("")
+    return lines
 
 
-def _latency_lines(jobs: list) -> list[str]:
-    lat = latency_by_schema_phase(timing_rows(jobs))
-    lines = ["## Latency by phase", "", "| phase | n | median_s | p95_s | total_bytes |", "|---|---|---|---|---|"]
-    for phase in SCHEMA_PHASES:
-        if phase in lat:
-            d = lat[phase]
-            lines.append(f"| {phase} | {d['n']} | {d['median_s']:.3f} | {d['p95_s']:.3f} | {d['total_bytes']} |")
-    return lines + [""]
-
-
-def render_timing_core(runid: str, mechanism: str, jobs: list) -> list[str]:
-    return ([f"# Runpod cache testbed report — {mechanism} {runid}", ""]
-            + _headline_lines(jobs) + _coldstart_lines(jobs) + _latency_lines(jobs))
+def render_timing_core(runid: str, mechanism: str, jobs: list, metrics_rows: list, state) -> list[str]:
+    return (_header_lines(runid, mechanism, jobs, state)
+            + _one_line_lines(jobs, metrics_rows)
+            + _cold_vs_warm_lines(mechanism, jobs)
+            + _coldstart_lines(jobs))
 
 
 def _load_jobs(path: str) -> list:
@@ -226,8 +346,10 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
 
     runid = sys.argv[1]
     mechanism = "shim"   # pre-abstraction runs have no state.mechanism
+    state = None
     if os.path.exists(state_path(runid)):
-        mechanism = ProvisionState.load(state_path(runid)).mechanism
+        state = ProvisionState.load(state_path(runid))
+        mechanism = state.mechanism
     mech = get_mechanism(mechanism)
 
     jobs = _load_jobs(f"data/jobs-{runid}.jsonl")
@@ -235,7 +357,8 @@ def main() -> None:  # integration: load jobs+metrics -> report.md + plots
     os.makedirs("data", exist_ok=True)
     _plots(mechanism, runid, jobs, metric_rows)
 
-    lines = render_timing_core(runid, mechanism, jobs) + mech.report_sections(jobs, metric_rows)
+    lines = (render_timing_core(runid, mechanism, jobs, metric_rows, state)
+             + mech.report_sections(jobs, metric_rows, state))
     out_path = report_path(mechanism, runid)
     with open(out_path, "w") as fh:
         fh.write("\n".join(lines))

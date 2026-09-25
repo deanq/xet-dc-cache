@@ -31,6 +31,22 @@ def per_pod_stats(metrics_rows: list) -> dict:
     return out
 
 
+def _peering_lines(payoff: dict, format_bytes, format_percent) -> list[str]:
+    """Plain-English peering paragraph. Zero peer+WAN bytes means peering was
+    never exercised this run (not a meaningless "0%")."""
+    if not payoff["peer_bytes"] and not payoff["wan_bytes"]:
+        return ["_Peering not exercised this run._", ""]
+    lines = [f"Of all cache-miss bytes, **{format_percent(payoff['peer_fraction'])} "
+             f"({format_bytes(payoff['peer_bytes'])}) were served peer-to-peer** over the backbone; "
+             f"only **{format_percent(1 - payoff['peer_fraction'])} "
+             f"({format_bytes(payoff['wan_bytes'])})** fell back to the internet."]
+    if payoff["hedge_win_ratio"]:
+        lines[0] += (f" When a peer lagged, the hedge raced the CDN and the peer still won "
+                     f"**{format_percent(payoff['hedge_win_ratio'])}** of the time.")
+    lines += ["", "_(Higher peer % = less internet egress = the point of the system.)_", ""]
+    return lines
+
+
 def _wait_addr(fleet, pid: str, timeout_s: int) -> str:
     from runpod_testbed.provision.fleet import parse_external_addr
     end = time.time() + timeout_s
@@ -121,19 +137,16 @@ class ShimMechanism:
         errored = teardown(fleet, legacy, flash_undeploy=lambda env: flash_undeploy(env, names=ENDPOINTS))
         print(f"shim teardown done; errored (tolerated): {errored}")
 
-    def report_sections(self, jobs: list, metrics_rows: list) -> list[str]:
-        from runpod_testbed.harvest.report import peering_payoff
-        lines = ["## Per-pod hit rate / WAN bytes saved", ""]
+    def report_sections(self, jobs: list, metrics_rows: list, state) -> list[str]:
+        from runpod_testbed.harvest.report import format_bytes, format_percent, peering_payoff, pod_label
         if not metrics_rows:
-            lines += [_NO_METRICS, "", "## Peering payoff", "", _NO_METRICS, ""]
-            return lines
-        lines += ["| pod | effective_hit_rate | wan_bytes_saved |", "|---|---|---|"]
+            return ["## Per-pod cache effectiveness", "", _NO_METRICS, "",
+                    "## Where the bytes came from (peering)", "", _NO_METRICS, ""]
+        lines = ["## Per-pod cache effectiveness", "",
+                 "| pod | hit rate | internet traffic avoided |", "|---|---|---|"]
         for pod, d in per_pod_stats(metrics_rows).items():
-            lines.append(f"| {pod} | {d['effective_hit_rate']:.4f} | {d['wan_bytes_saved']} |")
-        payoff = peering_payoff(metrics_rows)
-        lines += ["", "## Peering payoff", "",
-                  f"- peer_bytes: {payoff['peer_bytes']}",
-                  f"- wan_bytes: {payoff['wan_bytes']}",
-                  f"- peer_fraction: {payoff['peer_fraction']:.4f}",
-                  f"- hedge_win_ratio: {payoff['hedge_win_ratio']:.4f}", ""]
+            lines.append(f"| {pod_label(pod, state)} | {format_percent(d['effective_hit_rate'])} | "
+                         f"{format_bytes(d['wan_bytes_saved'])} |")
+        lines += ["", "## Where the bytes came from (peering)", ""]
+        lines += _peering_lines(peering_payoff(metrics_rows), format_bytes, format_percent)
         return lines

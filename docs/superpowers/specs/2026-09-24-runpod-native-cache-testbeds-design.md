@@ -324,14 +324,26 @@ exercise. Results:
   returns 200/204; the GraphQL `deleteNetworkVolume(input:{id})` mutation also
   works. This is why `provision/volumes.py` now sends a User-Agent.
 
-- **(b) Model Store cached model — NOT automatable; console-only.** Verified
-  against the live account: the full REST OpenAPI (`Runpod API 0.1.0`, 23 paths)
-  has no `model`/`cache`/`modelStore`/`huggingface` surface; a live endpoint
-  object exposes no cached-model field (only `templateId`, `networkVolumeId`,
-  scaler/worker fields); neither `runpod-python` nor `runpod-flash` exposes a
-  cached-model field; GraphQL introspection is disabled. Declaring a cached model
-  is only possible in the web console. **`ModelStoreMechanism` therefore keeps
-  the manual-attach + reuse paths permanently — there is no API branch to add.**
+- **(b) Model Store cached model — automatable via an UNDOCUMENTED GraphQL
+  field.** It is absent from every *public* surface: the full REST OpenAPI
+  (`Runpod API 0.1.0`, 23 paths) has no `model`/`cache` field, a live endpoint
+  object exposes none, neither `runpod-python` nor `runpod-flash` exposes one,
+  and GraphQL introspection is disabled. **But** the console's own JS uses a
+  `modelReferences` field on the `saveEndpoint` mutation, and it works with a
+  plain API key (verified live: `myself { endpoints { modelReferences } }` reads
+  it; `saveEndpoint(input: EndpointInput!)` accepts it). Caveats: `saveEndpoint`
+  is an UPSERT — you must read the endpoint's full current config (via
+  `myself { endpoints }`; there is no top-level `endpoint(id)` query) and resend
+  all of it plus `modelReferences`, and re-carry `modelReferences` on every
+  later save or it is dropped. `modelReferences` is `["org/name[:rev]"]`
+  lowercased; the API normalizes to a HF URL, so compare loosely. The endpoint
+  must NOT also have a network volume (both mount `/runpod-volume`). Staging
+  shows up as the platform's `delayTime` (worker held until a host has the
+  model), not handler time. **`ModelStoreMechanism.declare_cached_models` now
+  performs this GraphQL declaration** (`provision/modelstore_api.py`), falling
+  back to printing the manual console step if the call fails. The reuse path
+  (pre-created endpoints) remains available. *(Credit: reverse-engineered by a
+  sibling benchmarking session; not an officially supported API — it may change.)*
 
 - **(c) VolumeCache availability on the worker.** The Flash base image ships a
   `runpod` that predates `runpod.serverless.VolumeCache`, and `WORKER_DEPS` does

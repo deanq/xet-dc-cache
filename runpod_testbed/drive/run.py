@@ -1,6 +1,8 @@
 # Workload driver: expands the multi-model overlap matrix into a
-# COLD-then-WARM-BURST job list, submits jobs to the 3 Flash serverless
-# endpoints, and records per-job timings to JSONL.
+# COLD-then-WARM-BURST job list, submits baseline jobs to the control
+# endpoint, then the mechanism's job plan (`mechanism.jobs`) to the
+# endpoints recorded in `ProvisionState`, and records per-job timings to
+# JSONL.
 #
 # flash_manifest.json shape (confirmed 2026-09-22 against a live `flash deploy`
 # output): {"resources": {"xet-dl-A": {"functions": [...], "endpoint_id": "..."},
@@ -48,10 +50,32 @@ def start_jobs_file(path: str) -> None:
     open(path, "w").close()
 
 
+SEQUENTIAL_PHASES = ("baseline", "cold", "populate")
+
+
 def record(job: dict, result: dict, submit_ts: float, path: str) -> None:
-    row = {**job, "submit_ts": submit_ts, "return_ts": time.time(), "result": result}
+    return_ts = time.time()
+    row = {**job, "submit_ts": submit_ts, "return_ts": return_ts, "result": result}
+    if "mechanism" in job:  # shared timing schema (spec) — driver-observed wall
+        from runpod_testbed.worker.timing import make_timing_row
+        row["timing"] = make_timing_row(job["mechanism"], job, result, return_ts - submit_ts)
     with open(path, "a") as fh:
         fh.write(json.dumps(row) + "\n")
+
+
+def split_jobs(jobs: list) -> tuple[list, list]:
+    """Sequential phases (baseline / populate) first, then the warm burst."""
+    seq = [j for j in jobs if j["phase"] in SEQUENTIAL_PHASES]
+    burst = [j for j in jobs if j["phase"] not in SEQUENTIAL_PHASES]
+    return seq, burst
+
+
+def resolve_endpoints(jobs: list, endpoints: dict) -> dict:
+    wanted = sorted({j["endpoint"] for j in jobs})
+    missing = [w for w in wanted if w not in endpoints]
+    if missing:
+        raise ValueError(f"no endpoint id recorded for labels {missing}; state has {sorted(endpoints)}")
+    return {w: endpoints[w] for w in wanted}
 
 
 def _submit_and_wait(eid: str, job: dict, jobs_path: str, timeout_s: int) -> None:
@@ -90,7 +114,7 @@ def main(argv: list | None = None) -> None:
 
     from runpod_testbed.config import load
 
-    cfg = load(args.config)
+    cfg = load(args.config, mechanism_override=os.environ.get("MECHANISM"))
 
     if args.dry_run:
         os.environ["HF_ENDPOINT"] = args.dry_run
@@ -100,29 +124,27 @@ def main(argv: list | None = None) -> None:
             print(m, hf_download(m))
         return
 
-    from runpod_testbed.provision.up import State
+    from runpod_testbed.mechanisms import get_mechanism
+    from runpod_testbed.mechanisms.base import ProvisionState, state_path
+    from runpod_testbed.mechanisms.baseline import baseline_jobs
 
-    State.load(f"data/state-{args.runid}.json")  # validates runid before spend
-
-    with open("runpod_testbed/worker/.flash/flash_manifest.json") as fh:
-        manifest = json.load(fh)
-    eids = endpoint_ids(manifest)
-
-    jobs = expand_jobs(cfg.overlap, cfg.burst)
-    cold = [j for j in jobs if j["phase"] == "cold"]
-    warm = [j for j in jobs if j["phase"] == "warm"]
+    state = ProvisionState.load(state_path(args.runid))  # validates runid before spend
+    mech = get_mechanism(state.mechanism)
+    jobs = baseline_jobs(cfg.models) + mech.jobs(cfg)
+    eids = resolve_endpoints(jobs, state.endpoints)
+    sequential, burst = split_jobs(jobs)
 
     os.makedirs("data", exist_ok=True)
     jobs_path = f"data/jobs-{args.runid}.jsonl"
     start_jobs_file(jobs_path)  # fresh file so a re-run doesn't double-count
 
-    for job in cold:
-        _submit_and_wait(eids[job["group"]], job, jobs_path, cfg.job_timeout_s)
+    for job in sequential:
+        _submit_and_wait(eids[job["endpoint"]], job, jobs_path, cfg.job_timeout_s)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.burst) as pool:
-        futures = [pool.submit(_submit_and_wait, eids[job["group"]], job,
+        futures = [pool.submit(_submit_and_wait, eids[job["endpoint"]], job,
                                jobs_path, cfg.job_timeout_s)
-                   for job in warm]
+                   for job in burst]
         for f in concurrent.futures.as_completed(futures):
             f.result()
 

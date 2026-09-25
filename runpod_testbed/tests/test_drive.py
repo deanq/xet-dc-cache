@@ -2,8 +2,11 @@ import json
 import sys
 import types
 
+import pytest
+
 from runpod_testbed.drive.run import (
     expand_jobs, endpoint_ids, _submit_and_wait, start_jobs_file, record,
+    SEQUENTIAL_PHASES, resolve_endpoints, split_jobs,
 )
 
 def test_expand_cold_then_warm():
@@ -118,3 +121,41 @@ def test_start_jobs_file_creates_missing_parent_dir(tmp_path):
     jobs_path = str(tmp_path / "nested" / "jobs.jsonl")
     start_jobs_file(jobs_path)
     assert open(jobs_path).read() == ""
+
+
+def test_record_adds_shared_timing_row_when_job_carries_mechanism(tmp_path):
+    jobs_path = str(tmp_path / "jobs.jsonl")
+    job = {"mechanism": "baseline", "endpoint": "baseline", "model": "org/m@main",
+           "phase": "baseline", "replica": 0}
+    result = {"cold_first_invocation": False, "dep_upgrade_ms": 0,
+              "results": [{"ok": True, "bytes": 42, "wall_seconds": 1.0, "model": "org/m@main",
+                           "first_byte_ms": 1, "error": None,
+                           "breakdown": {"download_s": 0.9, "hydrate_s": None, "local_read_s": None}}]}
+    record(job, result, submit_ts=100.0, path=jobs_path)
+    row = json.loads(open(jobs_path).read())
+    t = row["timing"]
+    assert set(t) == {"mechanism", "phase", "model", "wall_seconds", "bytes", "breakdown", "worker_cold", "ok"}
+    assert t["mechanism"] == "baseline" and t["phase"] == "baseline" and t["bytes"] == 42
+    assert t["wall_seconds"] == row["return_ts"] - 100.0      # driver-observed, not handler wall
+    assert t["breakdown"]["download_s"] == 0.9 and t["ok"] is True
+
+
+def test_record_without_mechanism_stays_legacy(tmp_path):
+    jobs_path = str(tmp_path / "jobs.jsonl")
+    record({"group": "A", "model": "m", "phase": "cold", "replica": 0}, {"ok": True}, 1.0, jobs_path)
+    assert "timing" not in json.loads(open(jobs_path).read())
+
+
+def test_split_jobs_sequential_first_then_burst():
+    jobs = [{"phase": "warm"}, {"phase": "baseline"}, {"phase": "cold"}, {"phase": "populate"}]
+    seq, burst = split_jobs(jobs)
+    assert [j["phase"] for j in seq] == ["baseline", "cold", "populate"]
+    assert burst == [{"phase": "warm"}] and SEQUENTIAL_PHASES == ("baseline", "cold", "populate")
+
+
+def test_resolve_endpoints_fails_before_spend_on_missing_label():
+    jobs = [{"endpoint": "baseline"}, {"endpoint": "volumecache"}]
+    assert resolve_endpoints(jobs, {"baseline": "e0", "volumecache": "e1", "extra": "e2"}) == \
+        {"baseline": "e0", "volumecache": "e1"}
+    with pytest.raises(ValueError, match="volumecache"):
+        resolve_endpoints(jobs, {"baseline": "e0"})

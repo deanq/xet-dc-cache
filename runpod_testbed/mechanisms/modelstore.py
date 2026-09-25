@@ -18,6 +18,7 @@ from runpod_testbed.mechanisms.base import (
 )
 from runpod_testbed.provision.down import cli_undeploy
 from runpod_testbed.provision.flash import deploy_env, flash_deploy, manifest_endpoint_ids
+from runpod_testbed.provision.modelstore_api import set_model_references
 from runpod_testbed.worker.timing import MODELSTORE_ROOT
 
 REUSED_PREFIX = "reused-"
@@ -26,6 +27,14 @@ _ENDPOINTS_QUERY = "query { myself { endpoints { id name } } }"
 
 def model_label(i: int) -> str:
     return f"m{i}"
+
+
+def normalize_model_ref(model: str) -> str:
+    """cfg.models is 'org/name@rev'; Model Store's `modelReferences` wants
+    lowercase 'org/name' or 'org/name:rev' (console format)."""
+    repo, _, rev = model.partition("@")
+    ref = f"{repo}:{rev}" if rev else repo
+    return ref.lower()
 
 
 def manual_step_lines(cfg, state: ProvisionState) -> list[str]:
@@ -89,8 +98,28 @@ class ModelStoreMechanism:
         return state
 
     def declare_cached_models(self, cfg, state: ProvisionState, environ) -> None:
-        # Branch (i) — console-only (default until the spike says otherwise).
-        print("\n".join(manual_step_lines(cfg, state)), flush=True)
+        # API path (Phase 0 finding superseded): declare via the GraphQL
+        # saveEndpoint upsert. A failure degrades to the manual console step
+        # rather than crashing provision — a live run should never silently
+        # proceed with no cached model declared.
+        api_key = environ["RUNPOD_API_KEY"]
+        failures = []
+        for i, model in enumerate(cfg.models):
+            label = model_label(i)
+            if label not in state.endpoints:
+                continue
+            endpoint_id = state.endpoints[label]
+            ref = normalize_model_ref(model)
+            try:
+                set_model_references(endpoint_id, [ref], api_key)
+            except Exception as e:
+                failures.append((label, ref, e))
+                continue
+            print(f"declared {ref} on {endpoint_name(label)} ({endpoint_id})", flush=True)
+        if failures:
+            for label, ref, e in failures:
+                print(f"WARNING: failed to declare {ref} on {endpoint_name(label)}: {e}", flush=True)
+            print("\n".join(manual_step_lines(cfg, state)), flush=True)
 
     def teardown(self, state: ProvisionState, *, flash_undeploy=None) -> None:
         owned = [endpoint_name(label) for label in state.endpoints

@@ -309,3 +309,34 @@ make -C runpod_testbed down    RUNID=<id>
 - **Phase 2 — VolumeCache mechanism.**
 - **Phase 3 — Model Store mechanism.**
 - **Deferred — comparison roll-up** over `data/jobs-*.jsonl`.
+
+## Spike findings (Phase 0) — confirmed live 2026-09-25
+
+The Phase 0 spike was run against a live account during the first end-to-end
+exercise. Results:
+
+- **(a) Network-volume attach — automatable.** Flash's
+  `Endpoint(volume=NetworkVolume(name, size, datacenter))` creates and attaches
+  the volume at deploy; a volumecache run provisioned + attached + tore down a
+  10 GB volume cleanly. The Runpod REST API (`rest.runpod.io/v1/networkvolumes`)
+  is usable for list/`DELETE` **but requires a `User-Agent` header** — without
+  one, Cloudflare returns `403` (error 1010). `DELETE /v1/networkvolumes/{id}`
+  returns 200/204; the GraphQL `deleteNetworkVolume(input:{id})` mutation also
+  works. This is why `provision/volumes.py` now sends a User-Agent.
+
+- **(b) Model Store cached model — NOT automatable; console-only.** Verified
+  against the live account: the full REST OpenAPI (`Runpod API 0.1.0`, 23 paths)
+  has no `model`/`cache`/`modelStore`/`huggingface` surface; a live endpoint
+  object exposes no cached-model field (only `templateId`, `networkVolumeId`,
+  scaler/worker fields); neither `runpod-python` nor `runpod-flash` exposes a
+  cached-model field; GraphQL introspection is disabled. Declaring a cached model
+  is only possible in the web console. **`ModelStoreMechanism` therefore keeps
+  the manual-attach + reuse paths permanently — there is no API branch to add.**
+
+- **(c) VolumeCache availability on the worker.** The Flash base image ships a
+  `runpod` that predates `runpod.serverless.VolumeCache`, and `WORKER_DEPS` does
+  not override base packages. The worker therefore force-upgrades `runpod>=1.12.0`
+  at first invocation (for the volumecache downloader only) and drops the
+  pre-imported `runpod.serverless` from `sys.modules` before the lazy
+  `VolumeCache` import. With this, volumecache runs end-to-end
+  (baseline→warm ≈ 2.7× on the tiny-model set).

@@ -213,10 +213,11 @@ Append to the spec's `## Spike findings (Phase 0)` and this plan's block:
 
 Replace the two placeholder bullets in the block below with the recorded findings (a) and (b), and state which of Task 16 Step 3 / Task 19 Step 3 conditional branches applies.
 
-> ### Spike findings (Phase 0)
-> - (a) volume attach: _pending spike_
-> - (b) cached model: _pending spike_
-> - Consequence: Task 16 uses the Flash `volume=` path (default) unless (a) failed; Task 19 uses the manual-attach fallback (default) unless (b) found an API, in which case implement `_declare_cached_model` per Task 19 Step 3 (ii).
+> ### Spike findings (Phase 0) — CONFIRMED live 2026-09-25
+> - **(a) volume attach: AUTOMATABLE via Flash `Endpoint(volume=NetworkVolume(...))`.** Verified: a volumecache run provisioned + attached a 10 GB volume (`xet-vc-<runid>`) and tore it down cleanly. The Runpod REST API (`rest.runpod.io/v1/networkvolumes`) works for list/`DELETE` **but requires a `User-Agent` header** — without one Cloudflare returns `403` (error 1010). `DELETE /v1/networkvolumes/{id}` → 200/204; GraphQL `deleteNetworkVolume(input:{id})` also works. Listing returns a bare JSON list.
+> - **(b) cached model: NOT automatable — console-only.** Verified against the live account: the full REST OpenAPI (`Runpod API 0.1.0`, 23 paths) contains no `model`/`cache`/`modelStore`/`huggingface` surface anywhere; a live endpoint object exposes no cached-model field (only `templateId`, `networkVolumeId`, scaler/worker fields); neither `runpod-python` nor `runpod-flash` exposes a cached-model field; GraphQL introspection is disabled (cannot enumerate, but no documented field exists). Declaring a Model Store cached model is only possible in the web console.
+> - **(c) VolumeCache on the worker:** the Flash base image ships a `runpod` predating `runpod.serverless.VolumeCache`, and `WORKER_DEPS` does not override base packages. Fix shipped: `flash_app` force-upgrades `runpod>=1.12.0` at first invocation for the volumecache downloader and purges the pre-imported `runpod.serverless` from `sys.modules` before the lazy `VolumeCache` import (see `plan.upgrade_pkgs` / `flash_app._upgrade_once`).
+> - **Consequence (resolved):** Task 16's default Flash `volume=` branch is correct (keep it; the REST helper now sends a User-Agent). Task 19's manual-attach fallback is correct and permanent — there is **no** API to implement `_declare_cached_model` against, so Model Store always needs the operator's console step.
 
 - [ ] **Step 2: Commit**
 

@@ -10,6 +10,8 @@ from runpod_testbed.tests.test_config import VALID, VALID_VOLUMECACHE
 _CONFIG_TEXT = {
     "shim": VALID,
     "volumecache": VALID_VOLUMECACHE,
+    "modelstore": VALID_VOLUMECACHE.replace('mechanism = "volumecache"', 'mechanism = "modelstore"')
+                                   .replace("[volumecache]\nvolume_gb = 50", "[modelstore]"),
 }
 _METHODS = ("provision", "worker_spec", "teardown", "report_sections", "has_metrics", "jobs")
 

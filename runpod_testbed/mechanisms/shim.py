@@ -17,6 +17,19 @@ POD_WAIT_S = 300
 POLL_S = 3
 HEALTHZ_TIMEOUT_S = 5
 
+_NO_METRICS = ("_No pod metrics captured for this run "
+               "(`make scrape` was not running); section omitted._")
+
+
+def per_pod_stats(metrics_rows: list) -> dict:
+    from runpod_testbed.harvest.report import _final_by_pod
+    out = {}
+    for pod in sorted({r["pod"] for r in metrics_rows}):
+        pod_rows = [r for r in metrics_rows if r["pod"] == pod]
+        out[pod] = {"effective_hit_rate": _final_by_pod(pod_rows, "xet_effective_hit_rate"),
+                    "wan_bytes_saved": _final_by_pod(pod_rows, "xet_wan_bytes_saved")}
+    return out
+
 
 def _wait_addr(fleet, pid: str, timeout_s: int) -> str:
     from runpod_testbed.provision.fleet import parse_external_addr
@@ -109,4 +122,18 @@ class ShimMechanism:
         print(f"shim teardown done; errored (tolerated): {errored}")
 
     def report_sections(self, jobs: list, metrics_rows: list) -> list[str]:
-        return []   # filled in by Task 8
+        from runpod_testbed.harvest.report import peering_payoff
+        lines = ["## Per-pod hit rate / WAN bytes saved", ""]
+        if not metrics_rows:
+            lines += [_NO_METRICS, "", "## Peering payoff", "", _NO_METRICS, ""]
+            return lines
+        lines += ["| pod | effective_hit_rate | wan_bytes_saved |", "|---|---|---|"]
+        for pod, d in per_pod_stats(metrics_rows).items():
+            lines.append(f"| {pod} | {d['effective_hit_rate']:.4f} | {d['wan_bytes_saved']} |")
+        payoff = peering_payoff(metrics_rows)
+        lines += ["", "## Peering payoff", "",
+                  f"- peer_bytes: {payoff['peer_bytes']}",
+                  f"- wan_bytes: {payoff['wan_bytes']}",
+                  f"- peer_fraction: {payoff['peer_fraction']:.4f}",
+                  f"- hedge_win_ratio: {payoff['hedge_win_ratio']:.4f}", ""]
+        return lines

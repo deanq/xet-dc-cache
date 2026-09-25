@@ -54,3 +54,17 @@ def test_flash_app_downloaders_registry_wires_volumecache():
     assert "from timing import run_download, hf_download, volumecache_download" in flash_app_source
     # Verify volumecache is wired to volumecache_download in _DOWNLOADERS dict
     assert '"volumecache": volumecache_download' in flash_app_source
+
+
+def test_flash_app_gates_hf_upgrade_per_endpoint_via_needs_hf_upgrade():
+    # flash_app.py can't be imported here (it pulls in runpod_flash, unavailable
+    # no-spend), so this pins the wiring by source: the handler must consult
+    # plan.needs_hf_upgrade(plan.downloader) before running the pip upgrade,
+    # rather than upgrading unconditionally for every endpoint (see
+    # runpod_testbed.worker.plan.needs_hf_upgrade for the actual gate, which
+    # is exercised directly in test_worker_plan.py).
+    worker_dir = Path(WORKER_DIR).absolute()
+    flash_app_source = (worker_dir / "flash_app.py").read_text()
+    assert "from plan import needs_hf_upgrade, plan_endpoints" in flash_app_source
+    assert "hf_upgrade_needed = needs_hf_upgrade(plan.downloader)" in flash_app_source
+    assert "_upgrade_hf_once() if hf_upgrade_needed else (False, 0)" in flash_app_source

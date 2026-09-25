@@ -12,6 +12,15 @@ from typing import Mapping
 HF_HOME_DEFAULT = "/root/.cache/huggingface"
 SHIM_LABELS = ("A", "B", "C")
 ENDPOINT_PREFIX = "xet-dl"
+# modelstore's downloader is a pure filesystem walk that never imports
+# huggingface_hub/hf_xet, so flash_app's cold-start hf pip-upgrade is pure
+# overhead there — the exact metric modelstore exists to showcase. Every other
+# downloader (baseline, shim, volumecache) does a real HF download and needs it.
+_NO_HF_DOWNLOADERS = frozenset({"modelstore"})
+
+
+def needs_hf_upgrade(downloader: str) -> bool:
+    return downloader not in _NO_HF_DOWNLOADERS
 
 
 @dataclass

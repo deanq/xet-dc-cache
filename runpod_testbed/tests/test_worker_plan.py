@@ -1,6 +1,6 @@
 import pytest
 
-from runpod_testbed.worker.plan import HF_HOME_DEFAULT, EndpointPlan, plan_endpoints
+from runpod_testbed.worker.plan import HF_HOME_DEFAULT, EndpointPlan, needs_hf_upgrade, plan_endpoints
 
 MODELS = ["org/a@main", "org/b@main"]
 
@@ -56,3 +56,9 @@ def test_modelstore_plan_with_no_models_is_baseline_only():
 def test_unknown_mechanism_is_an_error():
     with pytest.raises(ValueError, match="mechanism"):
         plan_endpoints("turbo", MODELS, {})
+
+
+def test_needs_hf_upgrade_skips_only_modelstore():
+    assert needs_hf_upgrade("modelstore") is False
+    for downloader in ("baseline", "shim", "volumecache"):
+        assert needs_hf_upgrade(downloader) is True

@@ -7,7 +7,7 @@ from runpod_flash.core.resources.network_volume import NetworkVolume
 # Flash packages this worker/ dir as the deploy root, so timing.py / plan.py are
 # top-level siblings here — NOT importable as runpod_testbed.worker.*.
 from timing import run_download, hf_download, volumecache_download, modelstore_local_read
-from plan import plan_endpoints
+from plan import needs_hf_upgrade, plan_endpoints
 
 # Pin >= the versions that honor HF_ENDPOINT for Xet xorb fetches. Flash's base
 # image ships huggingface_hub 1.6.0 + hf_xet 1.3.2, and hf_xet 1.3.2 pulls xorbs
@@ -50,9 +50,10 @@ def _mk(plan):
     # it as `func(**job_input)` — the job's `input` dict is splatted as kwargs.
     # So the module-level binding MUST be named exactly the handler __name__.
     download_fn = _DOWNLOADERS[plan.downloader]
+    hf_upgrade_needed = needs_hf_upgrade(plan.downloader)
 
     async def handler(**payload) -> dict:
-        cold, dep_upgrade_ms = _upgrade_hf_once()
+        cold, dep_upgrade_ms = _upgrade_hf_once() if hf_upgrade_needed else (False, 0)
         return run_download(payload, download_fn,
                             cold_first_invocation=cold, dep_upgrade_ms=dep_upgrade_ms)
 

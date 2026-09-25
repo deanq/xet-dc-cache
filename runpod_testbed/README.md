@@ -31,6 +31,17 @@ All workers are CPU download-timing workers; nothing is loaded into VRAM.
 top of the mechanism's own pulls. CPU-only + mandatory teardown keeps this to
 cents per run; the baseline is what makes runs comparable, so do not skip it.
 
+### volumecache specifics
+
+- `make up MECHANISM=volumecache` deploys `xet-dl-volumecache` with a network
+  volume `xet-vc-<runid>` (`[volumecache] volume_gb`) attached at `/runpod-volume`,
+  plus the baseline endpoint. The worker runs `VolumeCache(dirs=[HF_HOME])`:
+  `hydrate()` before the download, synchronous `sync()` after.
+- Isolation: `VolumeCache`'s `namespace` defaults to `RUNPOD_ENDPOINT_ID`, so a
+  fresh endpoint per run never sees an older run's mirror; `make down` deletes
+  the volume (`DELETE /v1/networkvolumes/<id>`) so nothing stays billing.
+- Secrets: `RUNPOD_API_KEY` + `HF_TOKEN` only (`SHIM_AUTH_TOKEN` is shim-only).
+
 ## Architecture
 
 Unlike the local Docker e2e (`deploy/e2e/`, which runs the shim in containers

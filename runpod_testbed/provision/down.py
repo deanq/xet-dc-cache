@@ -37,11 +37,9 @@ def teardown(fleet, state: State, flash_undeploy=cli_undeploy) -> list[str]:
     return errored
 
 
-def _no_volume_delete(volume_id: str) -> None:
-    raise RuntimeError(f"volume {volume_id}: deletion not wired (Task 17)")
+from runpod_testbed.provision.volumes import delete_network_volume
 
-
-_default_volume_delete = _no_volume_delete   # Task 17 rebinds to volumes.delete_network_volume
+_default_volume_delete = delete_network_volume   # best-effort REST DELETE; 404 tolerated
 
 
 def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None) -> list[str]:
@@ -50,7 +48,7 @@ def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None) -> lis
     the rest from being torn down (they'd keep billing).
 
     Defaults resolve at call time (module attributes), so tests can monkeypatch
-    `down.cli_undeploy`; Task 17 points `_default_volume_delete` at the REST helper."""
+    `down.cli_undeploy` / `down._default_volume_delete`."""
     from runpod_testbed.mechanisms.base import BASELINE_LABEL, endpoint_name
     flash_undeploy = flash_undeploy or cli_undeploy
     delete_volume = delete_volume or _default_volume_delete

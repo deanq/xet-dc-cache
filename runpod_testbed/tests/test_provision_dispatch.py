@@ -48,10 +48,19 @@ def test_teardown_all_runs_mechanism_then_baseline_then_volumes_and_tolerates_er
     assert any("pods gone already" in e for e in errored) and any("vol-2" in e for e in errored)
 
 
-def test_teardown_all_reports_unwired_volume_deletion_instead_of_silently_skipping():
+def test_teardown_all_deletes_volumes_via_rest_helper_by_default():
+    from runpod_testbed.provision import down
+    from runpod_testbed.provision.volumes import delete_network_volume
+    assert down._default_volume_delete is delete_network_volume
+
+
+def test_teardown_all_uses_module_default_when_delete_volume_not_given(monkeypatch):
+    from runpod_testbed.provision import down
+    deleted = []
+    monkeypatch.setattr(down, "_default_volume_delete", lambda vid: deleted.append(vid))
     st = ProvisionState(mechanism="fake", runid="r", volumes={"vc": "vol-1"})
-    errored = teardown_all(_FakeMech(), st, flash_undeploy=lambda env, names: None)
-    assert any("vol-1" in e and "not wired" in e for e in errored)
+    assert teardown_all(_FakeMech(), st, flash_undeploy=lambda env, names: None) == []
+    assert deleted == ["vol-1"]
 
 
 def _fake_cfg(path, mechanism_override=None):

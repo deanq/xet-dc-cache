@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from runpod_testbed.mechanisms.base import WorkerSpec
 from runpod_testbed.provision.flash import (
@@ -43,3 +44,13 @@ def test_manifest_endpoint_ids_reads_flash_manifest(tmp_path):
     }}))
     assert manifest_endpoint_ids(str(p)) == {"A": "ep-a", "baseline": "ep-base", "m0": "ep-m0"}
     assert MANIFEST_PATH == "runpod_testbed/worker/.flash/flash_manifest.json"
+
+
+def test_flash_app_downloaders_registry_wires_volumecache():
+    # Verify the _DOWNLOADERS dict is correctly wired by checking the source.
+    worker_dir = Path(WORKER_DIR).absolute()
+    flash_app_source = (worker_dir / "flash_app.py").read_text()
+    # Verify volumecache_download is imported
+    assert "from timing import run_download, hf_download, volumecache_download" in flash_app_source
+    # Verify volumecache is wired to volumecache_download in _DOWNLOADERS dict
+    assert '"volumecache": volumecache_download' in flash_app_source

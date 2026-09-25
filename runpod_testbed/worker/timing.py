@@ -49,6 +49,34 @@ def hf_download(model: str):
     return (total, download_s, {"download_s": round(download_s, 3)})  # first-byte stays coarse
 
 
+HF_HOME_FALLBACK = "/root/.cache/huggingface"
+
+
+def volumecache_download(model: str, *, download_fn=None, cache_factory=None,
+                         hf_home: str | None = None):
+    """VolumeCache path: hydrate() restores the mirror from /runpod-volume, the HF
+    download is then a local cache hit (or a real WAN pull on the populate run),
+    and a SYNCHRONOUS sync() writes new files back so the next job can hydrate
+    them. Explicit calls rather than `with VolumeCache(...)`: __exit__ syncs on a
+    background daemon thread, which would return the populate job before the
+    mirror is written and let the first warm job race it.
+    """
+    if cache_factory is None:
+        from runpod.serverless import VolumeCache as cache_factory
+    download_fn = download_fn or hf_download
+    hf_home = hf_home or os.environ.get("HF_HOME", HF_HOME_FALLBACK)
+    vc = cache_factory(dirs=[hf_home], best_effort=True)   # namespace defaults to RUNPOD_ENDPOINT_ID
+    t0 = time.monotonic()
+    vc.hydrate()
+    hydrate_s = time.monotonic() - t0
+    t1 = time.monotonic()
+    nbytes, first_byte_s, _ = _unpack(download_fn(model))
+    download_s = time.monotonic() - t1
+    vc.sync(background=False)
+    return (nbytes, first_byte_s,
+            {"hydrate_s": round(hydrate_s, 3), "download_s": round(download_s, 3)})
+
+
 def schema_phase(job_phase: str) -> str:
     return _PHASE_ALIAS.get(job_phase, job_phase)
 

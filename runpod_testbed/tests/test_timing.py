@@ -1,5 +1,6 @@
 from runpod_testbed.worker.timing import time_one, run_download
 from runpod_testbed.worker.timing import EMPTY_BREAKDOWN, make_timing_row, schema_phase
+from runpod_testbed.worker.timing import volumecache_download
 
 def test_time_one_records_bytes_and_timing():
     out = time_one(lambda m: (1_000_000, 0.5), "org/x@main")
@@ -74,3 +75,41 @@ def test_make_timing_row_for_driver_side_failure():
     assert row["phase"] == "populate" and row["ok"] is False
     assert row["bytes"] == 0 and row["worker_cold"] is False
     assert row["breakdown"] == EMPTY_BREAKDOWN
+
+
+class _FakeVolumeCache:
+    instances: list = []
+
+    def __init__(self, dirs, *, namespace=None, volume_path="/runpod-volume", best_effort=True, max_workers=None):
+        self.dirs, self.best_effort, self.calls = dirs, best_effort, []
+        _FakeVolumeCache.instances.append(self)
+
+    def hydrate(self):
+        self.calls.append("hydrate")
+
+    def sync(self, *, background=True):
+        self.calls.append(f"sync(background={background})")
+
+
+def test_volumecache_download_hydrates_downloads_then_syncs_synchronously():
+    _FakeVolumeCache.instances.clear()
+    order = []
+
+    def fake_download(model):
+        order.append("download")
+        return (2048, 0.2, {"download_s": 0.2})
+
+    nbytes, first_byte_s, bd = volumecache_download(
+        "org/x@main", download_fn=fake_download, cache_factory=_FakeVolumeCache, hf_home="/tmp/hf")
+    vc = _FakeVolumeCache.instances[0]
+    assert vc.dirs == ["/tmp/hf"] and vc.best_effort is True
+    assert vc.calls == ["hydrate", "sync(background=False)"] and order == ["download"]
+    assert nbytes == 2048 and first_byte_s == 0.2
+    assert set(bd) == {"hydrate_s", "download_s"} and bd["hydrate_s"] >= 0 and bd["download_s"] >= 0
+
+
+def test_volumecache_download_defaults_hf_home_from_env(monkeypatch):
+    _FakeVolumeCache.instances.clear()
+    monkeypatch.setenv("HF_HOME", "/root/.cache/huggingface")
+    volumecache_download("m", download_fn=lambda m: (1, 0.0), cache_factory=_FakeVolumeCache)
+    assert _FakeVolumeCache.instances[0].dirs == ["/root/.cache/huggingface"]

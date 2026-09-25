@@ -10,6 +10,57 @@ This directory uses an **underscore** package name, `runpod_testbed/`
 (importable as `runpod_testbed.*`), even though some design docs refer to it
 as `runpod-testbed`.
 
+## Mechanisms under test
+
+The harness benchmarks one **mechanism** per run (`mechanism` in `config.toml`,
+or `make up MECHANISM=...`), always alongside a **baseline** control endpoint
+(`xet-dl-baseline`: plain `hf_hub_download` straight from HF). Every job emits
+the same timing row (`mechanism / phase / model / wall_seconds / bytes /
+breakdown / worker_cold / ok`, persisted in `data/jobs-<runid>.jsonl`), and the
+headline is `baseline_wall / mechanism_warm_wall`.
+
+| mechanism | what it exercises | phases | metrics scrape |
+|---|---|---|---|
+| `shim` | 3 peered xet-cache pods, `HF_ENDPOINT` interception (this README's original subject) | populate (cold) → warm burst | yes |
+| `volumecache` | `runpod.serverless.VolumeCache` mirror on a network volume at `/runpod-volume` | populate → warm burst | no |
+| `modelstore` | Runpod cached model pre-staged at `/runpod-volume/huggingface-cache/hub/...` | warm (scaled-from-zero cold start) | no |
+
+All workers are CPU download-timing workers; nothing is loaded into VRAM.
+
+**Cost note:** every run pays one extra WAN pull per model for the baseline on
+top of the mechanism's own pulls. CPU-only + mandatory teardown keeps this to
+cents per run; the baseline is what makes runs comparable, so do not skip it.
+
+### volumecache specifics
+
+- `make up MECHANISM=volumecache` deploys `xet-dl-volumecache` with a network
+  volume `xet-vc-<runid>` (`[volumecache] volume_gb`) attached at `/runpod-volume`,
+  plus the baseline endpoint. The worker runs `VolumeCache(dirs=[HF_HOME])`:
+  `hydrate()` before the download, synchronous `sync()` after.
+- Isolation: `VolumeCache`'s `namespace` defaults to `RUNPOD_ENDPOINT_ID`, so a
+  fresh endpoint per run never sees an older run's mirror; `make down` deletes
+  the volume (`DELETE /v1/networkvolumes/<id>`) so nothing stays billing.
+- Secrets: `RUNPOD_API_KEY` + `HF_TOKEN` only (`SHIM_AUTH_TOKEN` is shim-only).
+
+### modelstore specifics
+
+- `make up MECHANISM=modelstore` deploys one CPU endpoint per model
+  (`xet-dl-m0`, `xet-dl-m1`, ...) plus the baseline, then prints the **manual
+  step**: in the console, declare each endpoint's cached model (one per
+  endpoint — platform limit) and wait for staging to finish under
+  `/runpod-volume/huggingface-cache/hub/models--<org>--<name>/snapshots/<hash>/`.
+  (If the Phase 0 spike found an API, this step is automated — see
+  `docs/superpowers/specs/2026-09-24-runpod-native-cache-testbeds-design.md`,
+  "Spike findings".)
+- The warm metric is the driver's end-to-end wall on a **scaled-from-zero**
+  worker (replica 0 of each model's burst has `worker_cold = true`); the handler
+  never downloads — it asserts presence and reports `local_read_s`.
+- Reuse across runs: map `[modelstore.endpoints] "org/name@rev" = "<endpoint id>"`
+  for endpoints you already configured; `make up` then validates the ids, deploys
+  only the baseline, and `make down` leaves the reused endpoints alone (they keep
+  billing only while workers run; idle timeout is 30 s). Preflight's orphan check
+  will list them — that is expected in reuse mode.
+
 ## Architecture
 
 Unlike the local Docker e2e (`deploy/e2e/`, which runs the shim in containers
@@ -401,7 +452,7 @@ repo root):
 
 ```bash
 # test
-uv run --with pytest pytest runpod_testbed/tests -v
+uv run --with pytest --with pyarrow pytest runpod_testbed/tests -v
 # image        (build-linux first: it drops xetcache-linux-amd64 at repo root)
 make build-linux && docker build --platform linux/amd64 \
   -f runpod_testbed/provision/cache.Dockerfile -t <registry>/xet-cache-testbed:latest .

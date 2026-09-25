@@ -87,130 +87,156 @@ def peering_payoff(metric_rows: list) -> dict:
             "hedge_win_ratio": (won / fired) if fired else 0.0}
 
 
-def main() -> None:  # integration: load jobs+metrics -> report.md + plots
+SCHEMA_KEYS = frozenset({"mechanism", "phase", "model", "wall_seconds", "bytes",
+                         "breakdown", "worker_cold", "ok"})
+SCHEMA_PHASES = ("baseline", "populate", "warm")
+
+
+def report_path(mechanism: str, runid: str) -> str:
+    return f"data/report-{mechanism}-{runid}.md"
+
+
+def plot_path(mechanism: str, runid: str, kind: str) -> str:
+    return f"data/report-{mechanism}-{runid}-{kind}.png"
+
+
+def timing_rows(jobs: list) -> list:
+    return [j["timing"] for j in jobs if "timing" in j]
+
+
+def _stats(secs: list, total_bytes: int) -> dict:
+    secs = sorted(secs)
+    return {"n": len(secs), "median_s": st.median(secs),
+            "p95_s": secs[max(0, round(0.95 * len(secs)) - 1)], "total_bytes": total_bytes}
+
+
+def latency_by_schema_phase(rows: list) -> dict:
+    buckets: dict = {}
+    for r in rows:
+        if r["ok"]:
+            buckets.setdefault(r["phase"], []).append(r)
+    return {p: _stats([r["wall_seconds"] for r in rs], sum(r["bytes"] for r in rs))
+            for p, rs in buckets.items()}
+
+
+def headline_vs_baseline(rows: list) -> dict:
+    """The comparison money-stat: baseline_wall / mechanism_warm_wall (medians)."""
+    lat = latency_by_schema_phase(rows)
+    base, warm = lat.get("baseline"), lat.get("warm")
+    speedup = None
+    if base and warm and warm["median_s"] > 0:
+        speedup = base["median_s"] / warm["median_s"]
+    return {"n_ok": sum(1 for r in rows if r["ok"]),
+            "total_bytes": sum(d["total_bytes"] for d in lat.values()),
+            "baseline_median_s": base["median_s"] if base else None,
+            "warm_median_s": warm["median_s"] if warm else None,
+            "speedup": speedup}
+
+
+def _fmt(v, spec: str) -> str:  # None-safe number formatting
+    return format(v, spec) if v is not None else "n/a"
+
+
+def _headline_lines(jobs: list) -> list[str]:
+    h = headline_vs_baseline(timing_rows(jobs))
+    lines = ["## Headline", ""]
+    if h["speedup"] is not None:
+        lines.append(f"- **Baseline→warm speedup: {h['speedup']:.1f}× faster** "
+                     f"(median wall {h['baseline_median_s']:.2f}s → {h['warm_median_s']:.3f}s)")
+    legacy = headline(jobs)   # shim-only cold→warm (kept for continuity with older reports)
+    if legacy["speedup"] is not None:
+        lines.append(f"- Cold→warm speedup (legacy, handler wall): {legacy['speedup']:.1f}×")
+    lines += [f"- Jobs completed OK: {h['n_ok']}", f"- Total bytes served: {h['total_bytes']}", ""]
+    return lines
+
+
+def _coldstart_lines(jobs: list) -> list[str]:
+    cs = coldstart(jobs)
+    return ["## Cold-start vs steady-state", "",
+            f"- Cold (first-invocation) jobs: {cs['n_cold']}",
+            f"- Cold mean wall_seconds: {_fmt(cs['cold_mean_s'], '.3f')}",
+            f"- Warm mean wall_seconds: {_fmt(cs['warm_mean_s'], '.3f')}",
+            f"- Mean dep-upgrade ms: {_fmt(cs['dep_upgrade_ms'], '.0f')}", ""]
+
+
+def _latency_lines(jobs: list) -> list[str]:
+    lat = latency_by_schema_phase(timing_rows(jobs))
+    lines = ["## Latency by phase", "", "| phase | n | median_s | p95_s | total_bytes |", "|---|---|---|---|---|"]
+    for phase in SCHEMA_PHASES:
+        if phase in lat:
+            d = lat[phase]
+            lines.append(f"| {phase} | {d['n']} | {d['median_s']:.3f} | {d['p95_s']:.3f} | {d['total_bytes']} |")
+    return lines + [""]
+
+
+def render_timing_core(runid: str, mechanism: str, jobs: list) -> list[str]:
+    return ([f"# Runpod cache testbed report — {mechanism} {runid}", ""]
+            + _headline_lines(jobs) + _coldstart_lines(jobs) + _latency_lines(jobs))
+
+
+def _load_jobs(path: str) -> list:
     import json
+    jobs = []
+    with open(path) as fh:
+        for line in fh:
+            if line.strip():
+                jobs.append(json.loads(line))
+    return jobs
+
+
+def _load_metrics(path: str, runid: str) -> list:
     import os
-    import sys
     import pyarrow.parquet as pq
+    if os.path.exists(path):
+        return pq.read_table(path).to_pylist()
+    print(f"warning: {path} not found — omitting pod hit-rate and peering sections "
+          f"(run `make scrape RUNID={runid}` during a run to capture them)")
+    return []
+
+
+def _plots(mechanism: str, runid: str, jobs: list, metric_rows: list) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
-    runid = sys.argv[1]
-    jobs_path = f"data/jobs-{runid}.jsonl"
-    metrics_path = f"data/pod-metrics-{runid}.parquet"
-
-    jobs = []
-    with open(jobs_path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                jobs.append(json.loads(line))
-
-    # Pod metrics are optional: they come from `make scrape` running during a
-    # run. Without them we still emit the job-latency report (the core signal)
-    # and simply omit the hit-rate / peering sections rather than crashing.
-    if os.path.exists(metrics_path):
-        metric_rows = pq.read_table(metrics_path).to_pylist()
-    else:
-        metric_rows = []
-        print(f"warning: {metrics_path} not found — omitting pod hit-rate and "
-              f"peering sections (run `make scrape RUNID={runid}` during a run "
-              f"to capture them)")
-
-    latency = latency_by_phase(jobs)
-    payoff = peering_payoff(metric_rows)
-
-    pods = sorted({r["pod"] for r in metric_rows})
-    per_pod = {}
-    for pod in pods:
-        pod_rows = [r for r in metric_rows if r["pod"] == pod]
-        per_pod[pod] = {
-            "effective_hit_rate": _final_by_pod(pod_rows, "xet_effective_hit_rate"),
-            "wan_bytes_saved": _final_by_pod(pod_rows, "xet_wan_bytes_saved"),
-        }
-
-    os.makedirs("data", exist_ok=True)
-
-    # Latency-by-phase bar plot.
-    phases = sorted(latency.keys())
+    from runpod_testbed.mechanisms.shim import per_pod_stats
+    lat = latency_by_schema_phase(timing_rows(jobs))
+    phases = [p for p in SCHEMA_PHASES if p in lat]
     if phases:
         fig, ax = plt.subplots()
-        ax.bar(phases, [latency[p]["median_s"] for p in phases])
-        ax.set_ylabel("median wall_seconds")
-        ax.set_title(f"Latency by phase ({runid})")
-        fig.savefig(f"data/report-{runid}-latency.png")
+        ax.bar(phases, [lat[p]["median_s"] for p in phases])
+        ax.set_ylabel("median wall_seconds (driver-observed)")
+        ax.set_title(f"Latency by phase — {mechanism} ({runid})")
+        fig.savefig(plot_path(mechanism, runid, "latency"))
         plt.close(fig)
-
-    # Per-pod effective hit rate plot.
-    if pods:
+    per_pod = per_pod_stats(metric_rows)
+    if per_pod:
         fig, ax = plt.subplots()
-        ax.bar(pods, [per_pod[p]["effective_hit_rate"] for p in pods])
+        ax.bar(list(per_pod), [d["effective_hit_rate"] for d in per_pod.values()])
         ax.set_ylabel("effective_hit_rate")
         ax.set_title(f"Per-pod hit rate ({runid})")
-        fig.savefig(f"data/report-{runid}-hitrate.png")
+        fig.savefig(plot_path(mechanism, runid, "hitrate"))
         plt.close(fig)
 
-    lines = [f"# Runpod cache testbed report — {runid}", ""]
 
-    h = headline(jobs)
-    lines.append("## Headline")
-    lines.append("")
-    if h["speedup"] is not None:
-        lines.append(f"- **Cold→warm speedup: {h['speedup']:.1f}× faster** "
-                     f"(median wall {h['cold_median_s']:.2f}s → {h['warm_median_s']:.3f}s)")
-    lines.append(f"- Jobs completed OK: {h['n_ok']}")
-    lines.append(f"- Total bytes served: {h['total_bytes']}")
-    lines.append("")
+def main() -> None:  # integration: load jobs+metrics -> report.md + plots
+    import os
+    import sys
+    from runpod_testbed.mechanisms import get_mechanism
+    from runpod_testbed.mechanisms.base import ProvisionState, state_path
 
-    cs = coldstart(jobs)
+    runid = sys.argv[1]
+    mechanism = "shim"   # pre-abstraction runs have no state.mechanism
+    if os.path.exists(state_path(runid)):
+        mechanism = ProvisionState.load(state_path(runid)).mechanism
+    mech = get_mechanism(mechanism)
 
-    def _fmt(v, spec: str) -> str:  # None-safe number formatting for the table
-        return format(v, spec) if v is not None else "n/a"
+    jobs = _load_jobs(f"data/jobs-{runid}.jsonl")
+    metric_rows = _load_metrics(f"data/pod-metrics-{runid}.parquet", runid) if mech.has_metrics() else []
+    os.makedirs("data", exist_ok=True)
+    _plots(mechanism, runid, jobs, metric_rows)
 
-    lines.append("## Cold-start vs steady-state")
-    lines.append("")
-    lines.append(f"- Cold (first-invocation) jobs: {cs['n_cold']}")
-    lines.append(f"- Cold mean wall_seconds: {_fmt(cs['cold_mean_s'], '.3f')}")
-    lines.append(f"- Warm mean wall_seconds: {_fmt(cs['warm_mean_s'], '.3f')}")
-    lines.append(f"- Mean dep-upgrade ms: {_fmt(cs['dep_upgrade_ms'], '.0f')}")
-    lines.append("")
-
-    lines.append("## Latency by phase")
-    lines.append("")
-    lines.append("| phase | n | median_s | p95_s | total_bytes |")
-    lines.append("|---|---|---|---|---|")
-    for phase in phases:
-        d = latency[phase]
-        lines.append(f"| {phase} | {d['n']} | {d['median_s']:.3f} | {d['p95_s']:.3f} | {d['total_bytes']} |")
-    lines.append("")
-
-    lines.append("## Per-pod hit rate / WAN bytes saved")
-    lines.append("")
-    if not metric_rows:
-        lines.append("_No pod metrics captured for this run "
-                     "(`make scrape` was not running); section omitted._")
-    else:
-        lines.append("| pod | effective_hit_rate | wan_bytes_saved |")
-        lines.append("|---|---|---|")
-        for pod in pods:
-            d = per_pod[pod]
-            lines.append(f"| {pod} | {d['effective_hit_rate']:.4f} | {d['wan_bytes_saved']} |")
-    lines.append("")
-
-    lines.append("## Peering payoff")
-    lines.append("")
-    if not metric_rows:
-        lines.append("_No pod metrics captured for this run "
-                     "(`make scrape` was not running); section omitted._")
-    else:
-        lines.append(f"- peer_bytes: {payoff['peer_bytes']}")
-        lines.append(f"- wan_bytes: {payoff['wan_bytes']}")
-        lines.append(f"- peer_fraction: {payoff['peer_fraction']:.4f}")
-        lines.append(f"- hedge_win_ratio: {payoff['hedge_win_ratio']:.4f}")
-    lines.append("")
-
-    out_path = f"data/report-{runid}.md"
+    lines = render_timing_core(runid, mechanism, jobs) + mech.report_sections(jobs, metric_rows)
+    out_path = report_path(mechanism, runid)
     with open(out_path, "w") as fh:
         fh.write("\n".join(lines))
     print(f"wrote {out_path}")

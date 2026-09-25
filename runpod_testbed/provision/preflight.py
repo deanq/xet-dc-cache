@@ -3,6 +3,10 @@
 Fails loudly BEFORE spending money so problems surface early (at your desk),
 not on stage: missing secrets, an invalid/placeholder config, or orphaned
 resources still billing from a previous run.
+
+In modelstore reuse mode ([modelstore.endpoints] set) the pre-created endpoints
+are expected to exist and will be reported here as "orphaned" — read that line
+as a reminder of what is being reused, not as a failure to fix.
 """
 from __future__ import annotations
 import os

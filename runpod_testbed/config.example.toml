@@ -2,32 +2,47 @@
 # in real values -- do not commit config.toml (it may carry account-specific
 # registry paths).
 
-dc = "EU-RO-1"                              # Runpod datacenter id to pin pods to
-registry = "docker.io/CHANGEME"             # your container registry
-cache_image = "CHANGEME/xet-cache-testbed:latest"  # image running the cache shim
-worker_cpu = "cpu5c-4-8"                    # Flash worker instance flavor
+mechanism = "shim"                          # shim | volumecache | modelstore  (make ... MECHANISM=x overrides)
+
+dc = "EU-RO-1"                              # Runpod datacenter id to pin pods/endpoints to
+worker_cpu = "cpu5c-4-8"                    # Flash worker instance flavor (CPU only — no GPU load)
 # Pin newer than Flash's base image (which ships huggingface_hub 1.6.0 + hf_xet
 # 1.3.2): hf_xet 1.3.2 fetches Xet xorbs DIRECTLY from the CAS, ignoring the
 # shim's rewritten reconstruction URLs (bypasses the cache); >=1.6.0 honors them.
-worker_deps = ["huggingface_hub>=1.32.0", "hf_xet>=1.6.0"] # Python deps Flash installs on the worker
+worker_deps = ["huggingface_hub>=1.32.0", "hf_xet>=1.6.0"]
 container_disk_gb = 20   # CPU pods cap container disk at 20 GB; larger caches need a network volume
 scrape_interval_s = 5
 job_timeout_s = 600      # how long drive waits for one job (cold worker: boot + dep install + download)
 
 # Models under test (org/name@revision). Replace with real HF repo ids, e.g.:
 #   "meta-llama/Llama-3.1-8B@main"
-#   "mistralai/Mistral-7B-v0.1@main"
 models = ["org/CHANGEME-a@main", "org/CHANGEME-b@main", "org/CHANGEME-c@main"]
 
 burst = 4
-max_pods = 3
 max_burst = 8
+
+# ---- shim (only read when mechanism = "shim") -------------------------------
+[shim]
+registry = "docker.io/CHANGEME"             # your container registry
+cache_image = "CHANGEME/xet-cache-testbed:latest"  # image running the cache shim
+max_pods = 3
 pod_instance_id = "cpu3c-2-4"
 
 # Overlap groups: each key is a pod label, value is the subset of `models`
-# (above) that pod should warm. Every model referenced here must appear in
-# `models`, and the number of groups must not exceed `max_pods`.
-[overlap]
+# that pod should warm. Must be exactly A,B,C; every model must be in `models`.
+[shim.overlap]
 A = ["org/CHANGEME-a@main", "org/CHANGEME-b@main"]
 B = ["org/CHANGEME-b@main", "org/CHANGEME-c@main"]
 C = ["org/CHANGEME-c@main", "org/CHANGEME-a@main"]
+
+# ---- volumecache (only read when mechanism = "volumecache") ----------------
+[volumecache]
+volume_gb = 50           # network volume attached at /runpod-volume (10..4096)
+
+# ---- modelstore (only read when mechanism = "modelstore") ------------------
+# One endpoint per model (platform limit: one cached model per endpoint).
+# Leave `endpoints` empty to let `make up` deploy them; or map model -> an
+# endpoint id you pre-created in the console with the model already cached.
+[modelstore]
+[modelstore.endpoints]
+# "org/CHANGEME-a@main" = "endpoint-id"

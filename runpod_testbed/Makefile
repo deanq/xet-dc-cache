@@ -6,11 +6,11 @@
 #
 #   make test                       unit tests (no Runpod, no spend)
 #   make image                      build-linux + docker build the cache image
-#   make up                         provision 3 pods + deploy 3 Flash endpoints
+#   make up [MECHANISM=shim|volumecache|modelstore]   provision mechanism + baseline endpoint
 #   make dry-run CACHE_URL=http://<pod>:8000
-#   make scrape RUNID=<id>          poll pod metrics -> parquet (foreground)
+#   make scrape RUNID=<id>          poll pod metrics -> parquet (no-op for mechanisms without metrics)
 #   make drive  RUNID=<id>          run the workload
-#   make report RUNID=<id>          build the report
+#   make report RUNID=<id>          build data/report-<mechanism>-<id>.md
 #   make down   RUNID=<id>          tear everything down (MANDATORY after a run)
 #
 # RUNID is the timestamp `make up` prints — post-up targets need it, e.g.
@@ -28,6 +28,14 @@ ENV_FILE ?= $(CURDIR)/.env
 IMAGE    ?= xet-cache-testbed:latest
 STATE     = data/state-$(RUNID).json
 RUN      := uv run --with runpod
+
+# Mechanism under test. Empty = the `mechanism` key in config.toml decides;
+# set MECHANISM=volumecache|modelstore|shim to override for this invocation.
+# Exported so config.load(mechanism_override=os.environ.get("MECHANISM")) sees it.
+MECHANISM ?=
+ifneq ($(MECHANISM),)
+export MECHANISM
+endif
 
 # Source runpod_testbed/.env into the recipe shell. It holds the controller-side
 # secrets (RUNPOD_API_KEY, HF_TOKEN, SHIM_AUTH_TOKEN) — uv run does NOT read it.
@@ -50,11 +58,13 @@ help:
 	@echo "    make demo                    demo-up + demo-run back-to-back (for rehearsal)"
 	@echo ""
 	@echo "  Manual pieces:"
-	@echo "    make up                      provision 3 pods + deploy 3 Flash endpoints"
+	@echo "    make up [MECHANISM=x]        provision the mechanism under test + the baseline endpoint"
+	@echo "    make up MECHANISM=volumecache  Flash endpoint + network volume (/runpod-volume) + baseline"
+	@echo "    make up MECHANISM=modelstore   per-model endpoints + baseline; prints the console cached-model step"
 	@echo "    make dry-run CACHE_URL=...   validate wiring against one pod (no Flash)"
 	@echo "    make scrape RUNID=<id>       poll pod metrics -> parquet (foreground; & to bg)"
 	@echo "    make drive  RUNID=<id>       run the multi-model workload"
-	@echo "    make report RUNID=<id>       build latency + peering report"
+	@echo "    make report RUNID=<id>       build the shared timing report (+ shim peering sections)"
 	@echo "    make down   RUNID=<id>       tear down endpoints + pods (MANDATORY)"
 	@echo ""
 	@echo "RUNID is the timestamp 'make up' prints (demo targets read it from data/last-runid)."
@@ -78,7 +88,7 @@ setup:
 	@echo "  3. edit $(CONFIG)   # registry, cache_image, models, overlap"
 
 test:
-	@cd $(ROOT) && uv run --with pytest pytest runpod_testbed/tests -v
+	@cd $(ROOT) && uv run --with pytest --with pyarrow pytest runpod_testbed/tests -v
 
 # build-linux (root Makefile) drops xetcache-linux-amd64 at the repo root, which
 # the Dockerfile COPYs; then build the image from the repo-root context.
@@ -135,7 +145,7 @@ demo-run: _needs-lastrunid
 	$(RUN) python -m runpod_testbed.drive.run $(CONFIG) $$RUNID; \
 	kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; \
 	uv run --with pyarrow --with matplotlib python -m runpod_testbed.harvest.report $$RUNID; \
-	echo; echo "========== DEMO REPORT =========="; cat data/report-$$RUNID.md; echo "================================="
+	echo; echo "========== DEMO REPORT =========="; cat data/report-*-$$RUNID.md; echo "================================="
 
 # All-in-one for rehearsal (provision + run back-to-back).
 demo:

@@ -64,16 +64,19 @@ def write_metrics(buf: list, out: str) -> str:
 def main() -> None:  # integration: loop scrape all pods -> parquet
     import sys, signal
     from runpod_testbed import config
-    from runpod_testbed.provision.up import State
-    from runpod_testbed.provision.fleet import Fleet, parse_external_addr
+    from runpod_testbed.mechanisms import get_mechanism
+    from runpod_testbed.mechanisms.base import ProvisionState
 
-    st = State.load(sys.argv[1])
+    st = ProvisionState.load(sys.argv[1])
+    mech = get_mechanism(st.mechanism)
+    if not mech.has_metrics():
+        print(f"scrape: mechanism {mech.name!r} exposes no metrics endpoint; nothing to do", flush=True)
+        return
     # Config is the source of truth for the scrape interval (scrape_interval_s);
     # sys.argv[2] remains as an optional one-off override.
     cfg = config.load("runpod_testbed/config.toml")
     interval = int(sys.argv[2]) if len(sys.argv) > 2 else cfg.scrape_interval_s
-    fleet = Fleet()
-    addrs = {p: parse_external_addr(fleet.get_pod_ports(p)) for p in st.pods}
+    addrs = dict(st.metrics_urls)        # label -> http://ip:port (recorded by provision)
     out = f"data/pod-metrics-{st.runid}.parquet"
 
     # Flush on Ctrl-C (SIGINT → KeyboardInterrupt) AND on SIGTERM. The demo runs

@@ -60,6 +60,7 @@ help:
 	@echo "  Manual pieces:"
 	@echo "    make up [MECHANISM=x]        provision the mechanism under test + the baseline endpoint"
 	@echo "    make up MECHANISM=volumecache  Flash endpoint + network volume (/runpod-volume) + baseline"
+	@echo "    make up MECHANISM=modelstore   per-model endpoints + baseline; prints the console cached-model step"
 	@echo "    make dry-run CACHE_URL=...   validate wiring against one pod (no Flash)"
 	@echo "    make scrape RUNID=<id>       poll pod metrics -> parquet (foreground; & to bg)"
 	@echo "    make drive  RUNID=<id>       run the multi-model workload"

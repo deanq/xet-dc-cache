@@ -88,6 +88,15 @@ def test_teardown_undeploys_owned_model_endpoints_only():
     assert undeployed == [("xet-dl-m0",)]
 
 
+def test_teardown_on_pure_reuse_state_makes_zero_undeploy_calls():
+    undeployed = []
+    st = ProvisionState(mechanism="modelstore", runid="r1",
+                        endpoints={f"{REUSED_PREFIX}m0": "ep-x", f"{REUSED_PREFIX}m1": "ep-y",
+                                   BASELINE_LABEL: "eb"})
+    ModelStoreMechanism().teardown(st, flash_undeploy=lambda env, names: undeployed.append(tuple(names)))
+    assert undeployed == []
+
+
 def test_manual_step_lines_list_each_owned_endpoint_with_its_model():
     st = ProvisionState(mechanism="modelstore", runid="r1", endpoints={"m0": "e0", "m1": "e1", BASELINE_LABEL: "eb"})
     text = "\n".join(manual_step_lines(load_str(_MS), st))

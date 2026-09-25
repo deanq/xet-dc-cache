@@ -42,6 +42,25 @@ cents per run; the baseline is what makes runs comparable, so do not skip it.
   the volume (`DELETE /v1/networkvolumes/<id>`) so nothing stays billing.
 - Secrets: `RUNPOD_API_KEY` + `HF_TOKEN` only (`SHIM_AUTH_TOKEN` is shim-only).
 
+### modelstore specifics
+
+- `make up MECHANISM=modelstore` deploys one CPU endpoint per model
+  (`xet-dl-m0`, `xet-dl-m1`, ...) plus the baseline, then prints the **manual
+  step**: in the console, declare each endpoint's cached model (one per
+  endpoint — platform limit) and wait for staging to finish under
+  `/runpod-volume/huggingface-cache/hub/models--<org>--<name>/snapshots/<hash>/`.
+  (If the Phase 0 spike found an API, this step is automated — see
+  `docs/superpowers/specs/2026-09-24-runpod-native-cache-testbeds-design.md`,
+  "Spike findings".)
+- The warm metric is the driver's end-to-end wall on a **scaled-from-zero**
+  worker (replica 0 of each model's burst has `worker_cold = true`); the handler
+  never downloads — it asserts presence and reports `local_read_s`.
+- Reuse across runs: map `[modelstore.endpoints] "org/name@rev" = "<endpoint id>"`
+  for endpoints you already configured; `make up` then validates the ids, deploys
+  only the baseline, and `make down` leaves the reused endpoints alone (they keep
+  billing only while workers run; idle timeout is 30 s). Preflight's orphan check
+  will list them — that is expected in reuse mode.
+
 ## Architecture
 
 Unlike the local Docker e2e (`deploy/e2e/`, which runs the shim in containers

@@ -37,11 +37,46 @@ def teardown(fleet, state: State, flash_undeploy=cli_undeploy) -> list[str]:
     return errored
 
 
+def _no_volume_delete(volume_id: str) -> None:
+    raise RuntimeError(f"volume {volume_id}: deletion not wired (Task 17)")
+
+
+_default_volume_delete = _no_volume_delete   # Task 17 rebinds to volumes.delete_network_volume
+
+
+def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None) -> list[str]:
+    """Mechanism resources -> baseline endpoint -> network volumes. Best-effort:
+    every failure is returned, never raised, so one stuck resource can't stop
+    the rest from being torn down (they'd keep billing).
+
+    Defaults resolve at call time (module attributes), so tests can monkeypatch
+    `down.cli_undeploy`; Task 17 points `_default_volume_delete` at the REST helper."""
+    from runpod_testbed.mechanisms.base import BASELINE_LABEL, endpoint_name
+    flash_undeploy = flash_undeploy or cli_undeploy
+    delete_volume = delete_volume or _default_volume_delete
+    errored = []
+    try:
+        mech.teardown(state)
+    except Exception as e:
+        errored.append(f"{mech.name} teardown: {e}")
+    try:
+        flash_undeploy(f"xet-{state.runid}", names=(endpoint_name(BASELINE_LABEL),))
+    except Exception as e:
+        errored.append(f"baseline undeploy: {e}")
+    for label, vid in state.volumes.items():
+        try:
+            delete_volume(vid)
+        except Exception as e:
+            errored.append(f"volume {label}={vid}: {e}")
+    return errored
+
+
 def main() -> None:
     import sys
-    from runpod_testbed.provision.fleet import Fleet
-    st = State.load(sys.argv[1])
-    err = teardown(Fleet(), st)
+    from runpod_testbed.mechanisms import get_mechanism
+    from runpod_testbed.mechanisms.base import ProvisionState
+    st = ProvisionState.load(sys.argv[1])
+    err = teardown_all(get_mechanism(st.mechanism), st)
     print(f"teardown done; errored (tolerated): {err}")
 
 

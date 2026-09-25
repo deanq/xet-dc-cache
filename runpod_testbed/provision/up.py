@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from dataclasses import asdict, dataclass
 
 
@@ -30,8 +31,29 @@ class State:
             return cls(**json.load(fh))
 
 
-def main() -> None:
-    raise SystemExit("provision.up.main is rewired in Task 9")  # placeholder removed in Task 9
+def main(argv: list | None = None, *, environ=os.environ, get_mech=None,
+         load_config=None, now=time.strftime) -> None:
+    from runpod_testbed.mechanisms import get_mechanism
+    from runpod_testbed.mechanisms.base import ProvisionState, state_path
+    from runpod_testbed.provision.down import teardown_all
+    from runpod_testbed.config import load
+    argv = sys.argv[1:] if argv is None else argv
+    get_mech = get_mech or get_mechanism
+    load_config = load_config or load
+
+    cfg = load_config(argv[0] if argv else "config.toml", mechanism_override=environ.get("MECHANISM"))
+    mech = get_mech(cfg.mechanism)
+    runid = now("%Y%m%d-%H%M%S")
+    os.makedirs("data", exist_ok=True)
+    try:
+        state = mech.provision(cfg, runid)
+    except Exception:
+        print("provision failed; tearing down")
+        if os.path.exists(state_path(runid)):
+            print(teardown_all(mech, ProvisionState.load(state_path(runid))))
+        raise
+    print(f"UP runid={runid} mechanism={mech.name} endpoints={state.endpoints} "
+          f"pods={state.pods} volumes={state.volumes}")
 
 
 if __name__ == "__main__":

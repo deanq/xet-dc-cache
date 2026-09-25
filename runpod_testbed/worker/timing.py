@@ -81,11 +81,26 @@ MODELSTORE_ROOT = "/runpod-volume/huggingface-cache/hub"
 _DEFAULT_REV = "main"
 
 
+def _find_model_dir_case_insensitive(root: str, org: str, name: str) -> Path | None:
+    """The staged dir keeps HF's ORIGINAL case (models--Org--Name); our model id
+    may be lowercased (Model Store's `modelReferences` normalizes to lowercase),
+    so match by enumerating root rather than assuming exact case."""
+    target = f"models--{org}--{name}".lower()
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return None
+    return next((p for p in root_path.iterdir() if p.is_dir() and p.name.lower() == target), None)
+
+
 def modelstore_snapshot_dir(model: str, root: str) -> Path:
     """Runpod cached-model layout mirrors HF_HOME/hub: models--{org}--{name}/snapshots/{hash}."""
     repo, _, rev = model.partition("@")
     org, _, name = repo.partition("/")
-    base = Path(root) / f"models--{org}--{name}"
+    base = _find_model_dir_case_insensitive(root, org, name)
+    if base is None:
+        raise FileNotFoundError(
+            f"model {model}: no models--{org}--{name} dir (case-insensitive) under {root} "
+            f"— is the cached model declared on this endpoint?")
     ref = base / "refs" / (rev or _DEFAULT_REV)
     if ref.is_file():
         return base / "snapshots" / ref.read_text().strip()

@@ -14,6 +14,10 @@ WORKER_DIR = "runpod_testbed/worker"
 MANIFEST_PATH = f"{WORKER_DIR}/.flash/flash_manifest.json"
 
 
+def volume_name(runid: str) -> str:
+    return f"xet-vc-{runid}"
+
+
 def deploy_env(spec: WorkerSpec, cfg, hf_token: str, runid: str) -> dict[str, str]:
     env = {
         "MECHANISM": cfg.mechanism,
@@ -26,7 +30,7 @@ def deploy_env(spec: WorkerSpec, cfg, hf_token: str, runid: str) -> dict[str, st
         **spec.env,
     }
     if spec.network_volume_gb is not None:
-        env["VOLUME_NAME"] = f"xet-vc-{runid}"
+        env["VOLUME_NAME"] = volume_name(runid)
         env["VOLUME_GB"] = str(spec.network_volume_gb)
     return env
 

@@ -5,10 +5,11 @@ import pytest
 from runpod_testbed.config import load_str
 from runpod_testbed.mechanisms import MECHANISMS, get_mechanism
 from runpod_testbed.mechanisms.base import ProvisionState, WorkerSpec
-from runpod_testbed.tests.test_config import VALID
+from runpod_testbed.tests.test_config import VALID, VALID_VOLUMECACHE
 
 _CONFIG_TEXT = {
     "shim": VALID,
+    "volumecache": VALID_VOLUMECACHE,
 }
 _METHODS = ("provision", "worker_spec", "teardown", "report_sections", "has_metrics", "jobs")
 

@@ -17,7 +17,7 @@ def test_identity_spec_and_no_metrics():
     m = VolumeCacheMechanism()
     assert m.name == "volumecache" and m.has_metrics() is False
     assert m.worker_spec(_cfg()) == WorkerSpec(handler="volumecache", network_volume_gb=50)
-    assert m.report_sections([], []) == []
+    assert m.report_sections([], [], None) == []
 
 
 def test_jobs_populate_then_warm_burst_per_model():

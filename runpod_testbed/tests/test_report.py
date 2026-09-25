@@ -1,8 +1,9 @@
 from runpod_testbed.harvest.report import latency_by_phase, peering_payoff, headline, coldstart
 from runpod_testbed.harvest.report import (
-    SCHEMA_KEYS, headline_vs_baseline, latency_by_schema_phase, render_timing_core,
-    report_path, timing_rows,
+    SCHEMA_KEYS, format_bytes, format_percent, format_seconds, headline_vs_baseline,
+    latency_by_schema_phase, pod_label, render_timing_core, report_path, timing_rows,
 )
+from runpod_testbed.mechanisms.base import ProvisionState
 
 JOBS = [
     {"phase": "cold", "result": {"results": [{"ok": True, "wall_seconds": 10.0, "bytes": 100}]}},
@@ -112,12 +113,53 @@ def test_headline_speedup_none_without_baseline():
 
 
 def test_render_timing_core_mentions_mechanism_and_phases():
-    text = "\n".join(render_timing_core("r1", "volumecache", MIXED))
-    assert text.startswith("# Runpod cache testbed report — volumecache r1")
-    assert "Baseline→warm speedup: 7.8× faster" in text
+    text = "\n".join(render_timing_core("r1", "volumecache", MIXED, [], None))
+    assert text.startswith("# Cache testbed report — volumecache")
+    assert "7.8× faster" in text
     assert "| baseline |" in text and "| populate |" in text and "| warm |" in text
-    assert "## Cold-start vs steady-state" in text
+    assert "## Cold start" in text
 
 
 def test_report_path_is_per_mechanism():
     assert report_path("modelstore", "r1") == "data/report-modelstore-r1.md"
+
+
+PEERING_ROWS = [
+    {"pod": "A", "ts": 1, "name": "xet_peer_bytes_total", "labels": {}, "value": 90},
+    {"pod": "A", "ts": 1, "name": "xet_wan_bytes_total", "labels": {}, "value": 10},
+]
+
+
+def test_one_line_summary_includes_speedup_and_peer_percent_when_peering_data_present():
+    text = "\n".join(render_timing_core("r1", "shim", MIXED, PEERING_ROWS, None))
+    assert "## In one line" in text
+    assert "7.8× faster" in text
+    assert "90% of cache-miss bytes came from a neighboring cache pod" in text
+
+
+def test_one_line_summary_omits_peer_sentence_without_peering_data():
+    text = "\n".join(render_timing_core("r1", "volumecache", MIXED, [], None))
+    assert "neighboring cache pod" not in text
+
+
+def test_format_bytes_renders_kb_mb_gb_human_units():
+    assert format_bytes(8_801_316_242) == "8.8 GB"
+    assert format_bytes(4096) == "4 KB"
+    assert format_bytes(None) == "n/a"
+
+
+def test_format_percent_renders_whole_percent():
+    assert format_percent(0.9) == "90%"
+    assert format_percent(0.0) == "0%"
+    assert format_percent(None) == "n/a"
+
+
+def test_format_seconds_uses_more_precision_below_one_second():
+    assert format_seconds(1.510) == "1.5s"
+    assert format_seconds(0.163) == "0.16s"
+
+
+def test_pod_label_maps_known_id_and_falls_back_to_short_id():
+    st = ProvisionState(mechanism="shim", runid="r1", pods={"A": "xb3exuk3uxcqrn"})
+    assert pod_label("xb3exuk3uxcqrn", st) == "pod A"
+    assert pod_label("unknownid", None) == "pod unknow"

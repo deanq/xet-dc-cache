@@ -71,21 +71,35 @@ def test_shim_teardown_undeploys_its_endpoints_then_terminates_pods():
 
 
 _ROWS = [
-    {"pod": "A", "ts": 1, "name": "xet_effective_hit_rate", "labels": {}, "value": 0.5},
-    {"pod": "A", "ts": 2, "name": "xet_effective_hit_rate", "labels": {}, "value": 1.0},
-    {"pod": "A", "ts": 2, "name": "xet_wan_bytes_saved", "labels": {}, "value": 4096},
-    {"pod": "A", "ts": 2, "name": "xet_peer_bytes_total", "labels": {}, "value": 30},
-    {"pod": "A", "ts": 2, "name": "xet_wan_bytes_total", "labels": {}, "value": 70},
+    {"pod": "pod-A", "ts": 1, "name": "xet_effective_hit_rate", "labels": {}, "value": 0.5},
+    {"pod": "pod-A", "ts": 2, "name": "xet_effective_hit_rate", "labels": {}, "value": 1.0},
+    {"pod": "pod-A", "ts": 2, "name": "xet_wan_bytes_saved", "labels": {}, "value": 4096},
+    {"pod": "pod-A", "ts": 2, "name": "xet_peer_bytes_total", "labels": {}, "value": 30},
+    {"pod": "pod-A", "ts": 2, "name": "xet_wan_bytes_total", "labels": {}, "value": 70},
 ]
+_STATE = ProvisionState(mechanism="shim", runid="r1", pods={"A": "pod-A"})
 
 
 def test_shim_report_sections_render_hit_rate_and_peering_tables():
-    text = "\n".join(ShimMechanism().report_sections([], _ROWS))
-    assert "## Per-pod hit rate / WAN bytes saved" in text
-    assert "| A | 1.0000 | 4096 |" in text
-    assert "## Peering payoff" in text and "- peer_fraction: 0.3000" in text
+    text = "\n".join(ShimMechanism().report_sections([], _ROWS, _STATE))
+    assert "## Per-pod cache effectiveness" in text
+    assert "| pod A | 100% | 4 KB |" in text
+    assert "## Where the bytes came from (peering)" in text
+    assert "30% (30 B)" in text and "served peer-to-peer" in text
+
+
+def test_shim_report_sections_pod_label_falls_back_to_short_id_when_unknown():
+    rows = [{"pod": "xb3exuk3uxcqrn", "ts": 1, "name": "xet_effective_hit_rate", "labels": {}, "value": 1.0}]
+    text = "\n".join(ShimMechanism().report_sections([], rows, None))
+    assert "| pod xb3exu | 100% | 0 B |" in text
 
 
 def test_shim_report_sections_without_metrics_say_so():
-    text = "\n".join(ShimMechanism().report_sections([], []))
+    text = "\n".join(ShimMechanism().report_sections([], [], None))
     assert text.count("No pod metrics captured for this run") == 2
+
+
+def test_shim_report_sections_zero_peering_says_not_exercised():
+    rows = [{"pod": "pod-A", "ts": 1, "name": "xet_effective_hit_rate", "labels": {}, "value": 1.0}]
+    text = "\n".join(ShimMechanism().report_sections([], rows, _STATE))
+    assert "Peering not exercised this run." in text

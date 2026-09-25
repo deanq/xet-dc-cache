@@ -10,6 +10,27 @@ This directory uses an **underscore** package name, `runpod_testbed/`
 (importable as `runpod_testbed.*`), even though some design docs refer to it
 as `runpod-testbed`.
 
+## Mechanisms under test
+
+The harness benchmarks one **mechanism** per run (`mechanism` in `config.toml`,
+or `make up MECHANISM=...`), always alongside a **baseline** control endpoint
+(`xet-dl-baseline`: plain `hf_hub_download` straight from HF). Every job emits
+the same timing row (`mechanism / phase / model / wall_seconds / bytes /
+breakdown / worker_cold / ok`, persisted in `data/jobs-<runid>.jsonl`), and the
+headline is `baseline_wall / mechanism_warm_wall`.
+
+| mechanism | what it exercises | phases | metrics scrape |
+|---|---|---|---|
+| `shim` | 3 peered xet-cache pods, `HF_ENDPOINT` interception (this README's original subject) | populate (cold) → warm burst | yes |
+| `volumecache` | `runpod.serverless.VolumeCache` mirror on a network volume at `/runpod-volume` | populate → warm burst | no |
+| `modelstore` | Runpod cached model pre-staged at `/runpod-volume/huggingface-cache/hub/...` | warm (scaled-from-zero cold start) | no |
+
+All workers are CPU download-timing workers; nothing is loaded into VRAM.
+
+**Cost note:** every run pays one extra WAN pull per model for the baseline on
+top of the mechanism's own pulls. CPU-only + mandatory teardown keeps this to
+cents per run; the baseline is what makes runs comparable, so do not skip it.
+
 ## Architecture
 
 Unlike the local Docker e2e (`deploy/e2e/`, which runs the shim in containers
@@ -401,7 +422,7 @@ repo root):
 
 ```bash
 # test
-uv run --with pytest pytest runpod_testbed/tests -v
+uv run --with pytest --with pyarrow pytest runpod_testbed/tests -v
 # image        (build-linux first: it drops xetcache-linux-amd64 at repo root)
 make build-linux && docker build --platform linux/amd64 \
   -f runpod_testbed/provision/cache.Dockerfile -t <registry>/xet-cache-testbed:latest .

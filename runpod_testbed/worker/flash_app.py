@@ -71,3 +71,4 @@ def _mk(plan):
 # Flash's scanner finds Endpoint instances via dir(module), so dynamic bindings work.
 for _plan in plan_endpoints(_MECHANISM, _MODELS, os.environ):
     globals()[_plan.binding] = _mk(_plan)
+del _plan

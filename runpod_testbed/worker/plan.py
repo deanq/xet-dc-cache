@@ -1,6 +1,3 @@
-# Verified against the installed `runpod-flash` package (Endpoint signature
-# inspected live via `inspect.signature`): cpu/datacenter/workers/idle_timeout/
-# dependencies/env/volume all exist; DataCenter.EU_RO_1 exists as spelled.
 """Pure plan of which Flash endpoints flash_app.py builds for a mechanism.
 
 Kept SDK-free so it is unit-testable; flash_app.py turns each EndpointPlan into

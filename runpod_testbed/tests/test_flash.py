@@ -56,15 +56,15 @@ def test_flash_app_downloaders_registry_wires_volumecache():
     assert '"volumecache": volumecache_download' in flash_app_source
 
 
-def test_flash_app_gates_hf_upgrade_per_endpoint_via_needs_hf_upgrade():
+def test_flash_app_upgrades_per_endpoint_via_upgrade_pkgs():
     # flash_app.py can't be imported here (it pulls in runpod_flash, unavailable
-    # no-spend), so this pins the wiring by source: the handler must consult
-    # plan.needs_hf_upgrade(plan.downloader) before running the pip upgrade,
-    # rather than upgrading unconditionally for every endpoint (see
-    # runpod_testbed.worker.plan.needs_hf_upgrade for the actual gate, which
-    # is exercised directly in test_worker_plan.py).
+    # no-spend), so this pins the wiring by source: the handler must derive the
+    # per-endpoint pip set from plan.upgrade_pkgs(plan.downloader) and pass it to
+    # _upgrade_once, rather than upgrading a fixed set for every endpoint (see
+    # runpod_testbed.worker.plan.upgrade_pkgs, exercised directly in
+    # test_worker_plan.py).
     worker_dir = Path(WORKER_DIR).absolute()
     flash_app_source = (worker_dir / "flash_app.py").read_text()
-    assert "from plan import needs_hf_upgrade, plan_endpoints" in flash_app_source
-    assert "hf_upgrade_needed = needs_hf_upgrade(plan.downloader)" in flash_app_source
-    assert "_upgrade_hf_once() if hf_upgrade_needed else (False, 0)" in flash_app_source
+    assert "from plan import plan_endpoints, upgrade_pkgs" in flash_app_source
+    assert "pkgs = upgrade_pkgs(plan.downloader)" in flash_app_source
+    assert "cold, dep_upgrade_ms = _upgrade_once(pkgs)" in flash_app_source

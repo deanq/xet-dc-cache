@@ -7,7 +7,7 @@ from runpod_flash.core.resources.network_volume import NetworkVolume
 # Flash packages this worker/ dir as the deploy root, so timing.py / plan.py are
 # top-level siblings here — NOT importable as runpod_testbed.worker.*.
 from timing import run_download, hf_download, volumecache_download, modelstore_local_read
-from plan import needs_hf_upgrade, plan_endpoints
+from plan import plan_endpoints, upgrade_pkgs
 
 # Pin >= the versions that honor HF_ENDPOINT for Xet xorb fetches. Flash's base
 # image ships huggingface_hub 1.6.0 + hf_xet 1.3.2, and hf_xet 1.3.2 pulls xorbs
@@ -28,19 +28,24 @@ _DOWNLOADERS = {"shim": hf_download, "baseline": hf_download,
                 "volumecache": volumecache_download, "modelstore": modelstore_local_read}
 
 
-def _upgrade_hf_once() -> tuple[bool, int]:
-    # Flash's base image ships hf_xet 1.3.2, which fetches Xet xorbs DIRECTLY
-    # from the CAS and bypasses the shim. WORKER_DEPS does not upgrade the base's
-    # pre-installed version, so force-upgrade once at first invocation, BEFORE
-    # huggingface_hub is first imported (timing.hf_download imports it lazily).
-    # Applied to every mechanism (baseline included) so hf versions are equal.
-    import subprocess, sys, time
-    if _UPGRADED:
+def _upgrade_once(pkgs: list[str]) -> tuple[bool, int]:
+    # WORKER_DEPS does not upgrade the Flash base image's pre-installed packages,
+    # so force-upgrade the ones this downloader needs once at first invocation,
+    # BEFORE they are lazily imported (timing.hf_download / volumecache_download
+    # import huggingface_hub / runpod.serverless lazily). See plan.upgrade_pkgs.
+    import importlib, subprocess, sys, time
+    if _UPGRADED or not pkgs:
         return False, 0
     t0 = time.monotonic()
-    subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade",
-                    "huggingface_hub>=1.32.0", "hf_xet>=1.6.0"],
+    subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", *pkgs],
                    check=False, capture_output=True)
+    # The runpod serverless harness imports runpod.serverless before our handler,
+    # so the pre-upgrade module is cached; drop it so the lazy VolumeCache import
+    # loads the freshly-installed files.
+    if any(p.startswith("runpod") for p in pkgs):
+        importlib.invalidate_caches()
+        for name in [m for m in sys.modules if m == "runpod" or m.startswith("runpod.")]:
+            del sys.modules[name]
     _UPGRADED.append(True)
     return True, round((time.monotonic() - t0) * 1000)
 
@@ -50,10 +55,10 @@ def _mk(plan):
     # it as `func(**job_input)` — the job's `input` dict is splatted as kwargs.
     # So the module-level binding MUST be named exactly the handler __name__.
     download_fn = _DOWNLOADERS[plan.downloader]
-    hf_upgrade_needed = needs_hf_upgrade(plan.downloader)
+    pkgs = upgrade_pkgs(plan.downloader)
 
     async def handler(**payload) -> dict:
-        cold, dep_upgrade_ms = _upgrade_hf_once() if hf_upgrade_needed else (False, 0)
+        cold, dep_upgrade_ms = _upgrade_once(pkgs)
         return run_download(payload, download_fn,
                             cold_first_invocation=cold, dep_upgrade_ms=dep_upgrade_ms)
 

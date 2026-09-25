@@ -17,10 +17,27 @@ ENDPOINT_PREFIX = "xet-dl"
 # overhead there — the exact metric modelstore exists to showcase. Every other
 # downloader (baseline, shim, volumecache) does a real HF download and needs it.
 _NO_HF_DOWNLOADERS = frozenset({"modelstore"})
+# WORKER_DEPS cannot override the Flash base image's pre-installed packages, so
+# the needed ones are force-upgraded at first invocation (see flash_app). The
+# base image ships old hf_xet (bypasses the shim) and an old runpod-python
+# (no runpod.serverless.VolumeCache), so volumecache additionally needs runpod.
+_HF_PKGS = ("huggingface_hub>=1.32.0", "hf_xet>=1.6.0")
+_RUNPOD_PKG = "runpod>=1.12.0"  # first version exposing runpod.serverless.VolumeCache
 
 
 def needs_hf_upgrade(downloader: str) -> bool:
     return downloader not in _NO_HF_DOWNLOADERS
+
+
+def upgrade_pkgs(downloader: str) -> list[str]:
+    """Pip packages flash_app force-upgrades on the worker at first invocation,
+    before their lazy import. Empty for modelstore (pure filesystem read)."""
+    if downloader in _NO_HF_DOWNLOADERS:
+        return []
+    pkgs = list(_HF_PKGS)
+    if downloader == "volumecache":  # VolumeCache comes from runpod-python
+        pkgs.append(_RUNPOD_PKG)
+    return pkgs
 
 
 @dataclass

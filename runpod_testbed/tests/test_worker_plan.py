@@ -1,6 +1,7 @@
 import pytest
 
-from runpod_testbed.worker.plan import HF_HOME_DEFAULT, EndpointPlan, needs_hf_upgrade, plan_endpoints
+from runpod_testbed.worker.plan import (
+    HF_HOME_DEFAULT, EndpointPlan, needs_hf_upgrade, plan_endpoints, upgrade_pkgs)
 
 MODELS = ["org/a@main", "org/b@main"]
 
@@ -62,3 +63,15 @@ def test_needs_hf_upgrade_skips_only_modelstore():
     assert needs_hf_upgrade("modelstore") is False
     for downloader in ("baseline", "shim", "volumecache"):
         assert needs_hf_upgrade(downloader) is True
+
+
+def test_upgrade_pkgs_adds_runpod_only_for_volumecache():
+    assert upgrade_pkgs("modelstore") == []
+    for downloader in ("baseline", "shim"):
+        pkgs = upgrade_pkgs(downloader)
+        assert any("huggingface_hub" in p for p in pkgs)
+        assert any("hf_xet" in p for p in pkgs)
+        assert not any(p.startswith("runpod") for p in pkgs)
+    vc = upgrade_pkgs("volumecache")
+    assert any("huggingface_hub" in p for p in vc)
+    assert any(p.startswith("runpod>=") for p in vc)  # VolumeCache via runpod-python

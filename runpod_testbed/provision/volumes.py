@@ -12,11 +12,17 @@ REST_BASE = "https://rest.runpod.io/v1"
 _TIMEOUT_S = 20
 _OK_DELETE = (200, 204)
 _ALREADY_GONE = 404
+# rest.runpod.io sits behind Cloudflare, which returns 403 (error 1010) to
+# requests with no User-Agent. api.runpod.io (GraphQL) does not; this header is
+# what makes the REST path usable with a normal API key.
+_USER_AGENT = "xet-dc-cache-testbed"
 
 
 def _request(method: str, url: str, api_key: str, opener) -> tuple[int, bytes]:
     req = urllib.request.Request(
-        url, method=method, headers={"Authorization": f"Bearer {api_key}"}
+        url,
+        method=method,
+        headers={"Authorization": f"Bearer {api_key}", "User-Agent": _USER_AGENT},
     )
     try:
         with opener(req, timeout=_TIMEOUT_S) as r:

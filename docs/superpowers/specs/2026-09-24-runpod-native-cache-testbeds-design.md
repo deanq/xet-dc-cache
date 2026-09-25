@@ -352,3 +352,17 @@ exercise. Results:
   pre-imported `runpod.serverless` from `sys.modules` before the lazy
   `VolumeCache` import. With this, volumecache runs end-to-end
   (baseline→warm ≈ 2.7× on the tiny-model set).
+
+- **(d) Model Store staging is GPU-only — the CPU testbed cannot measure it.**
+  Declaration (b) succeeds on CPU endpoints (`modelReferences` set and normalized
+  to HF URLs), but the platform never stages the files to a CPU worker. Confirmed
+  live across multiple runs, including benchmark's exact working GPU pattern
+  (declare right after deploy, before any worker) and a forced-cold worker
+  (`workersMax 0→1` with `modelReferences` re-carried): every CPU worker reported
+  `no models--<org>--<name> dir under /runpod-volume/huggingface-cache/hub`, so
+  zero Model Store warm jobs completed. This matches the platform's Global-Volume
+  restriction ("CPU endpoints don't support them"). **Conclusion:** the
+  `modelstore` mechanism's declaration + worker code are correct and shipped, but
+  a real Model Store *measurement* requires GPU endpoints, which is out of scope
+  for this CPU download-timing testbed. shim (8.2×) and volumecache (2.7×) are the
+  two mechanisms this testbed can measure on CPU.

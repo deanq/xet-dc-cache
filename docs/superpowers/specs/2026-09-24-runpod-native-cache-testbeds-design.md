@@ -366,3 +366,46 @@ exercise. Results:
   a real Model Store *measurement* requires GPU endpoints, which is out of scope
   for this CPU download-timing testbed. shim (8.2×) and volumecache (2.7×) are the
   two mechanisms this testbed can measure on CPU.
+
+## Measurement notes — cold-start latency vs steady-state (2026-09-25)
+
+Model Store's apparent cold-start cost is actually **two separate costs**, and
+conflating them made the original report's "warm" bucket unfair:
+
+1. **Provisioning-triggered DC staging** — declaring `modelReferences` on an
+   endpoint eagerly stages the weights to the platform's tiered cache (host-local
+   disk → DC-scoped network volume → origin) at declaration time, not per-worker.
+2. **Per-cold-worker runtime `delayTime`** — even with staging already done, every
+   *cold* GPU worker still incurs a platform-reported, **unbilled**
+   placement/staging wait (Runpod job status `delayTime`, ms) before the handler
+   runs. The caller waits for it; it recurs on every scale-out cold start.
+
+shim/volumecache fill their cache **lazily at runtime** (a job the caller waits
+for once, then serves fast warm reads with no further per-worker penalty).
+Model Store fills **eagerly** at provisioning, but still pays (2) on every cold
+worker — so comparing shim/volumecache's warm reads against Model Store's
+`wall_seconds` was comparing "warm" to "warm + staging wait", not like for like.
+
+**Fix (this report):** `drive/run.py` now reads `delayTime`/`executionTime`
+(ms) off the raw job status (`Job._fetch_job()`, not `.status()`, which only
+returns the status string) and persists them as `delay_seconds`/`exec_seconds`
+on the shared timing row (`worker/timing.py::make_timing_row`), both optional
+and defaulting to `None` for mechanisms/rows that don't carry them.
+`harvest/report.py` now renders two views instead of one:
+
+- **Cold-start latency (end-to-end)** — unchanged `wall_seconds` table (what the
+  caller actually waits, submit → ready). For Model Store this now carries an
+  explicit note that a large share of the wait is unbilled platform staging,
+  which recurs per cold worker at scale-out — this is real caller-facing latency,
+  not an artifact to explain away.
+- **Steady-state (once running)** — a like-for-like view built from
+  `exec_seconds` (falling back to the handler's own breakdown read/download/
+  hydrate time when the platform didn't report `executionTime`), excluding queue
+  and placement/staging wait. This is the fair warm-vs-warm scoreboard.
+
+Model Store's "In one line" summary is now framed as **two separate claims**
+rather than one speedup number: (a) cheapest + fastest once running (near-
+instant local read, staging unbilled), and (b) highest cold-start latency
+(placement/staging wait dominates submit→ready, scaling with model size and
+host availability). shim/volumecache keep their existing clean end-to-end warm
+win; the steady-state view just adds detail for them.

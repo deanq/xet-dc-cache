@@ -69,6 +69,7 @@ def test_make_timing_row_matches_shared_schema():
         "wall_seconds": 7.5, "bytes": 1234,
         "breakdown": {"download_s": 0.1, "hydrate_s": 1.0, "local_read_s": None},
         "worker_cold": True, "ok": True,
+        "delay_seconds": None, "exec_seconds": None,
     }
 
 
@@ -78,6 +79,20 @@ def test_make_timing_row_for_driver_side_failure():
     assert row["phase"] == "populate" and row["ok"] is False
     assert row["bytes"] == 0 and row["worker_cold"] is False
     assert row["breakdown"] == EMPTY_BREAKDOWN
+    assert row["delay_seconds"] is None and row["exec_seconds"] is None
+
+
+def test_make_timing_row_carries_optional_platform_delay_and_exec_seconds():
+    # delay_seconds/exec_seconds surface the platform's placement/staging wait
+    # (delayTime) and execution time (executionTime), read by drive/run.py from
+    # the raw job status -- optional, additive to the shared schema.
+    job = {"mechanism": "modelstore", "endpoint": "m0", "model": "org/x@main", "phase": "warm", "replica": 0}
+    result = {"results": [{"model": "org/x@main", "bytes": 500, "first_byte_ms": 1, "wall_seconds": 45.0,
+                           "ok": True, "error": None,
+                           "breakdown": {"download_s": None, "hydrate_s": None, "local_read_s": 0.02}}]}
+    row = make_timing_row("modelstore", job, result, wall_seconds=45.0,
+                          delay_seconds=44.5, exec_seconds=0.02)
+    assert row["delay_seconds"] == 44.5 and row["exec_seconds"] == 0.02
 
 
 class _FakeVolumeCache:

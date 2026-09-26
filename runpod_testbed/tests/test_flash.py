@@ -17,6 +17,13 @@ def test_deploy_env_carries_mechanism_models_and_worker_knobs():
     assert env["WORKER_CPU"] == "cpu5c-4-8" and env["WORKER_DEPS"] == "huggingface_hub"
     assert env["WORKER_MAX"] == "3" and env["FLASH_ENV"] == "xet-r1"
     assert "VOLUME_NAME" not in env
+    assert env["WORKER_GPU"] == ""
+
+
+def test_deploy_env_carries_worker_gpu_when_set():
+    cfg = _cfg(worker_gpu="AMPERE_16")
+    env = deploy_env(WorkerSpec(handler="shim"), cfg, hf_token="hf_x", runid="r1")
+    assert env["WORKER_GPU"] == "AMPERE_16"
 
 
 def test_deploy_env_adds_volume_knobs_when_spec_wants_a_volume():
@@ -65,6 +72,20 @@ def test_flash_app_upgrades_per_endpoint_via_upgrade_pkgs():
     # test_worker_plan.py).
     worker_dir = Path(WORKER_DIR).absolute()
     flash_app_source = (worker_dir / "flash_app.py").read_text()
-    assert "from plan import plan_endpoints, upgrade_pkgs" in flash_app_source
+    assert "from plan import gpu_names, plan_endpoints, upgrade_pkgs" in flash_app_source
     assert "pkgs = upgrade_pkgs(plan.downloader)" in flash_app_source
     assert "cold, dep_upgrade_ms = _upgrade_once(pkgs)" in flash_app_source
+
+
+def test_flash_app_wires_optional_gpu_endpoint():
+    # flash_app.py can't be imported here (no-spend), so pin the GPU branch by
+    # source: a WORKER_GPU value must resolve to Endpoint(gpu=..., gpu_count=1)
+    # instead of the default cpu= path (see plan.gpu_names, the SDK-free seam
+    # exercised directly in test_worker_plan.py).
+    worker_dir = Path(WORKER_DIR).absolute()
+    flash_app_source = (worker_dir / "flash_app.py").read_text()
+    assert "from runpod_flash import Endpoint, DataCenter, GpuGroup, GpuType" in flash_app_source
+    assert "_GPU_NAMES = gpu_names(" in flash_app_source
+    assert "gpu=_resolve_gpus(" in flash_app_source
+    assert "gpu_count=1" in flash_app_source
+    assert "if _GPU_NAMES:" in flash_app_source

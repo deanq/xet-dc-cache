@@ -10,6 +10,7 @@ def flash_deploy_env(addrs: dict, cfg, hf_token: str) -> dict:
     env = {f"POD_ADDR_{g}": a for g, a in addrs.items()}
     env["HF_TOKEN"] = hf_token
     env["WORKER_CPU"] = cfg.worker_cpu
+    env["WORKER_GPU"] = cfg.worker_gpu
     env["WORKER_DEPS"] = ",".join(cfg.worker_deps)
     env["WORKER_MAX"] = str(cfg.burst)
     return env

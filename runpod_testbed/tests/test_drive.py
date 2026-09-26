@@ -51,6 +51,20 @@ def _install_fake_runpod(monkeypatch, handle):
     monkeypatch.setitem(sys.modules, "runpod", fake)
 
 
+class _FakeHandleWithStatus(_FakeHandle):
+    """A handle whose _fetch_job() returns the raw job-status JSON (what the
+    Runpod SDK's Job._fetch_job(source="status") returns) -- unlike .status(),
+    which returns only the status string, this carries delayTime/executionTime
+    for serverless jobs (milliseconds)."""
+
+    def __init__(self, output, status_json):
+        super().__init__(output=output)
+        self._status_json = status_json
+
+    def _fetch_job(self):
+        return self._status_json
+
+
 def test_submit_and_wait_passes_real_timeout_not_zero(tmp_path, monkeypatch):
     # The bug: Job.output(timeout=0) returns None immediately without polling.
     # drive must pass the configured ceiling so it actually waits for a result.
@@ -101,6 +115,53 @@ def test_submit_and_wait_records_transient_api_error_without_crashing(tmp_path, 
     assert row["result"]["status"] is None   # status() also failed, guarded
 
 
+def test_submit_and_wait_captures_platform_delay_and_exec_seconds(tmp_path, monkeypatch):
+    # The asymmetry this fixes: Model Store's runtime host-placement wait shows
+    # up as the platform's delayTime (unbilled, but the caller waits it), lumped
+    # into wall_seconds today. Capture it separately (ms -> s) so the report can
+    # tell cold-start latency apart from steady-state execution.
+    handle = _FakeHandleWithStatus(
+        output={"ok": True, "results": []},
+        status_json={"status": "COMPLETED", "delayTime": 15000, "executionTime": 20, "output": {}})
+    _install_fake_runpod(monkeypatch, handle)
+    jobs_path = tmp_path / "jobs.jsonl"
+    job = {"mechanism": "modelstore", "endpoint": "m0", "model": "org/m@main", "phase": "warm", "replica": 0}
+
+    _submit_and_wait("ep-a", job, str(jobs_path), timeout_s=600)
+
+    row = json.loads(jobs_path.read_text().strip())
+    assert row["timing"]["delay_seconds"] == 15.0
+    assert row["timing"]["exec_seconds"] == 0.02
+
+
+def test_submit_and_wait_tolerates_status_missing_platform_keys(tmp_path, monkeypatch):
+    handle = _FakeHandleWithStatus(output={"ok": True, "results": []}, status_json={"status": "COMPLETED"})
+    _install_fake_runpod(monkeypatch, handle)
+    jobs_path = tmp_path / "jobs.jsonl"
+    job = {"mechanism": "shim", "endpoint": "A", "model": "org/m@main", "phase": "warm", "replica": 0}
+
+    _submit_and_wait("ep-a", job, str(jobs_path), timeout_s=600)
+
+    row = json.loads(jobs_path.read_text().strip())
+    assert row["timing"]["delay_seconds"] is None
+    assert row["timing"]["exec_seconds"] is None
+
+
+def test_submit_and_wait_tolerates_fetch_job_failure_without_crashing(tmp_path, monkeypatch):
+    # A handle with no _fetch_job (or one that raises) must not crash the
+    # driver -- the platform metrics are supplementary detail, not load-bearing.
+    handle = _FakeHandle(output={"ok": True, "results": []})
+    _install_fake_runpod(monkeypatch, handle)
+    jobs_path = tmp_path / "jobs.jsonl"
+    job = {"mechanism": "shim", "endpoint": "A", "model": "org/m@main", "phase": "warm", "replica": 0}
+
+    _submit_and_wait("ep-a", job, str(jobs_path), timeout_s=600)
+
+    row = json.loads(jobs_path.read_text().strip())
+    assert row["timing"]["delay_seconds"] is None
+    assert row["timing"]["exec_seconds"] is None
+
+
 def test_start_jobs_file_truncates_so_reruns_dont_double_count(tmp_path):
     # Regression: record() appends, so a second drive pass on the same RUNID
     # must not accumulate on top of the first pass's rows.
@@ -134,7 +195,8 @@ def test_record_adds_shared_timing_row_when_job_carries_mechanism(tmp_path):
     record(job, result, submit_ts=100.0, path=jobs_path)
     row = json.loads(open(jobs_path).read())
     t = row["timing"]
-    assert set(t) == {"mechanism", "phase", "model", "wall_seconds", "bytes", "breakdown", "worker_cold", "ok"}
+    assert set(t) == {"mechanism", "phase", "model", "wall_seconds", "bytes", "breakdown", "worker_cold", "ok",
+                      "delay_seconds", "exec_seconds"}
     assert t["mechanism"] == "baseline" and t["phase"] == "baseline" and t["bytes"] == 42
     assert t["wall_seconds"] == row["return_ts"] - 100.0      # driver-observed, not handler wall
     assert t["breakdown"]["download_s"] == 0.9 and t["ok"] is True

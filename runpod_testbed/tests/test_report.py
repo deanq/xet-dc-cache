@@ -2,7 +2,9 @@ from runpod_testbed.harvest.report import latency_by_phase, peering_payoff, head
 from runpod_testbed.harvest.report import (
     SCHEMA_KEYS, format_bytes, format_percent, format_seconds, headline_vs_baseline,
     latency_by_schema_phase, pod_label, render_timing_core, report_path, timing_rows,
+    steady_state_by_schema_phase,
 )
+from runpod_testbed.mechanisms import get_mechanism
 from runpod_testbed.mechanisms.base import ProvisionState
 
 JOBS = [
@@ -62,12 +64,14 @@ def test_coldstart_separates_cold_and_warm():
     assert c["dep_upgrade_ms"] == 15000
 
 
-def _t(mechanism, phase, wall, nbytes=100, ok=True, cold=False, **bd):
+def _t(mechanism, phase, wall, nbytes=100, ok=True, cold=False,
+      delay_seconds=None, exec_seconds=None, **bd):
     return {"phase": phase, "result": {},
             "timing": {"mechanism": mechanism, "phase": phase, "model": "org/x@main",
                        "wall_seconds": wall, "bytes": nbytes,
                        "breakdown": {"download_s": None, "hydrate_s": None, "local_read_s": None, **bd},
-                       "worker_cold": cold, "ok": ok}}
+                       "worker_cold": cold, "ok": ok,
+                       "delay_seconds": delay_seconds, "exec_seconds": exec_seconds}}
 
 # Mixed-mechanism fixture: locks the schema shared by shim, volumecache, modelstore + baseline.
 MIXED = [
@@ -163,3 +167,53 @@ def test_pod_label_maps_known_id_and_falls_back_to_short_id():
     st = ProvisionState(mechanism="shim", runid="r1", pods={"A": "xb3exuk3uxcqrn"})
     assert pod_label("xb3exuk3uxcqrn", st) == "pod A"
     assert pod_label("unknownid", None) == "pod unknow"
+
+
+# --- cold-start latency vs steady-state (delayTime/executionTime separation) ---
+# Model Store's runtime host-placement wait (delayTime) inflates end-to-end
+# wall_seconds without inflating actual work (executionTime): a fair report
+# must show both, not blend them into a single speedup.
+
+MODELSTORE_MIXED = [
+    _t("baseline", "baseline", 30.0, download_s=29.0),
+    _t("baseline", "baseline", 32.0, download_s=31.0),
+    _t("modelstore", "warm", 46.0, local_read_s=0.05, delay_seconds=45.0, exec_seconds=0.05),
+    _t("modelstore", "warm", 44.0, local_read_s=0.03, delay_seconds=43.5, exec_seconds=0.03),
+]
+
+
+def test_steady_state_prefers_exec_seconds_falls_back_to_breakdown():
+    lat = steady_state_by_schema_phase(timing_rows(MODELSTORE_MIXED))
+    assert lat["warm"]["median_s"] == 0.04           # median(0.05, 0.03) exec_seconds
+    assert lat["baseline"]["median_s"] == 30.0        # no exec_seconds -> breakdown download_s fallback
+
+
+def test_report_renders_both_cold_start_latency_and_steady_state_sections():
+    mech = get_mechanism("modelstore")
+    lines = (render_timing_core("r1", "modelstore", MODELSTORE_MIXED, [], None)
+            + mech.report_sections(MODELSTORE_MIXED, [], None))
+    text = "\n".join(lines)
+    assert "## Cold-start latency (end-to-end)" in text
+    assert "## Steady-state (once running)" in text
+    assert "45.0s" in text or "46.0s" in text          # e2e wall shows the delay-inflated number
+    assert "0.04s" in text                             # steady-state shows the once-running number
+
+
+def test_modelstore_cold_start_notes_unbilled_platform_staging():
+    text = "\n".join(render_timing_core("r1", "modelstore", MODELSTORE_MIXED, [], None))
+    assert "provisioning-triggered platform staging" in text
+    assert "delayTime" in text and "unbilled" in text
+
+
+def test_modelstore_framed_as_two_claims_not_one_speedup_headline():
+    text = "\n".join(render_timing_core("r1", "modelstore", MODELSTORE_MIXED, [], None))
+    assert "two separate claims" in text
+    assert "cheapest and fastest once running" in text
+    assert "highest cold-start latency" in text
+    assert "× faster" not in text                      # no collapsed modelstore "Nx faster" headline
+
+
+def test_non_modelstore_mechanisms_keep_their_clean_warm_speedup_headline():
+    text = "\n".join(render_timing_core("r1", "volumecache", MIXED, [], None))
+    assert "7.8× faster" in text
+    assert "## Steady-state (once running)" in text     # steady-state view still adds detail

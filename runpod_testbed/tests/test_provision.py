@@ -1,13 +1,14 @@
 from runpod_testbed.provision.up import flash_deploy_env, State
 from runpod_testbed.provision.down import teardown, cli_undeploy, ENDPOINTS
 
-def _cfg():
+def _cfg(**overrides):
     from runpod_testbed.config import Config
     return Config(dc="EU-RO-1", registry="r", cache_image="c",
                   worker_cpu="cpu5c-4-8", worker_deps=["huggingface_hub"],
                   models=["x"], overlap={"A": ["x"]}, burst=3, max_pods=3,
                   max_burst=8, pod_instance_id="cpu3c-2-4",
-                  container_disk_gb=60, scrape_interval_s=5, job_timeout_s=600)
+                  container_disk_gb=60, scrape_interval_s=5, job_timeout_s=600,
+                  **overrides)
 
 def test_flash_deploy_env_maps_addrs_and_worker_knobs():
     env = flash_deploy_env({"A": "http://1:41", "B": "http://2:42", "C": "http://3:43"},
@@ -18,6 +19,11 @@ def test_flash_deploy_env_maps_addrs_and_worker_knobs():
     assert env["WORKER_CPU"] == "cpu5c-4-8"
     assert env["WORKER_DEPS"] == "huggingface_hub"
     assert env["WORKER_MAX"] == "3"
+    assert env["WORKER_GPU"] == ""
+
+def test_flash_deploy_env_carries_worker_gpu_when_set():
+    env = flash_deploy_env({"A": "http://1:41"}, _cfg(worker_gpu="AMPERE_16"), "hf_throwaway")
+    assert env["WORKER_GPU"] == "AMPERE_16"
 
 def test_state_roundtrip(tmp_path):
     p = tmp_path / "state.json"

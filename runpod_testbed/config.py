@@ -25,10 +25,11 @@ class Config:
     mechanism: str = "shim"
     volume_gb: int = 0                                   # [volumecache]
     modelstore_endpoints: dict[str, str] = field(default_factory=dict)  # [modelstore.endpoints]
+    worker_gpu: str = ""                                 # "" = CPU; comma-list of GpuGroup/GpuType names
 
 
 _SHARED = ("dc", "worker_cpu", "worker_deps", "models", "burst", "max_burst",
-           "container_disk_gb", "scrape_interval_s", "job_timeout_s")
+           "container_disk_gb", "scrape_interval_s", "job_timeout_s", "worker_gpu")
 _SHIM = ("registry", "cache_image", "overlap", "max_pods", "pod_instance_id")
 _SHIM_ABSENT = {"registry": "", "cache_image": "", "overlap": {}, "max_pods": 0,
                 "pod_instance_id": ""}
@@ -37,7 +38,7 @@ _SHIM_ABSENT = {"registry": "", "cache_image": "", "overlap": {}, "max_pods": 0,
 # Job.output(timeout=0) does NOT wait — it returns None immediately — so drive
 # must pass a real ceiling that covers a cold worker's boot + dep install +
 # download. Optional (defaulted) so pre-existing configs keep working.
-_DEFAULTS = {"dc": "EU-RO-1", "job_timeout_s": 600}
+_DEFAULTS = {"dc": "EU-RO-1", "job_timeout_s": 600, "worker_gpu": ""}
 
 
 def _shim_section(raw: dict) -> dict:

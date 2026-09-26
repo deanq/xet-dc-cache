@@ -2,18 +2,21 @@
 # inspected live via `inspect.signature`): cpu/datacenter/workers/idle_timeout/
 # dependencies/env/volume all exist; DataCenter.EU_RO_1 exists as spelled.
 import os
-from runpod_flash import Endpoint, DataCenter
+from runpod_flash import Endpoint, DataCenter, GpuGroup, GpuType
 from runpod_flash.core.resources.network_volume import NetworkVolume
 # Flash packages this worker/ dir as the deploy root, so timing.py / plan.py are
 # top-level siblings here — NOT importable as runpod_testbed.worker.*.
 from timing import run_download, hf_download, volumecache_download, modelstore_local_read
-from plan import plan_endpoints, upgrade_pkgs
+from plan import gpu_names, plan_endpoints, upgrade_pkgs
 
 # Pin >= the versions that honor HF_ENDPOINT for Xet xorb fetches. Flash's base
 # image ships huggingface_hub 1.6.0 + hf_xet 1.3.2, and hf_xet 1.3.2 pulls xorbs
 # straight from the CAS (bypassing the shim); >=1.6.0 uses the rewritten URLs.
 _DEPS = os.environ.get("WORKER_DEPS", "huggingface_hub>=1.32.0,hf_xet>=1.6.0").split(",")
 _CPU = os.environ.get("WORKER_CPU", "cpu5c-4-8")
+# Non-empty WORKER_GPU switches every _mk endpoint from cpu= to gpu= (Model
+# Store staging is GPU-only). Empty (default) preserves today's CPU behavior.
+_GPU_NAMES = gpu_names(os.environ)
 _MAX = int(os.environ.get("WORKER_MAX", "4"))
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
 _IDLE_TIMEOUT_S = 30
@@ -50,6 +53,21 @@ def _upgrade_once(pkgs: list[str]) -> tuple[bool, int]:
     return True, round((time.monotonic() - t0) * 1000)
 
 
+def _resolve_gpus(names: list[str]) -> list:
+    """WORKER_GPU entries name a GpuGroup or GpuType enum member; resolve each
+    against both, in that order, and fail loudly on a typo rather than let
+    Flash's Endpoint(gpu=...) reject it with a less specific error."""
+    gpus = []
+    for name in names:
+        if name in GpuGroup.__members__:
+            gpus.append(GpuGroup[name])
+        elif name in GpuType.__members__:
+            gpus.append(GpuType[name])
+        else:
+            raise ValueError(f"WORKER_GPU: {name!r} is not a GpuGroup or GpuType member")
+    return gpus
+
+
 def _mk(plan):
     # The generated deployed handler resolves `flash_app.<func_name>` and CALLS
     # it as `func(**job_input)` — the job's `input` dict is splatted as kwargs.
@@ -67,9 +85,15 @@ def _mk(plan):
     if plan.volume_gb is not None:
         volume = NetworkVolume(name=plan.env["VOLUME_NAME"], size=plan.volume_gb,
                                datacenter=DataCenter.EU_RO_1)
+    env = {**plan.env, "HF_TOKEN": _HF_TOKEN}
+    if _GPU_NAMES:
+        return Endpoint(name=plan.name, gpu=_resolve_gpus(_GPU_NAMES), gpu_count=1,
+                        datacenter=DataCenter.EU_RO_1, workers=(0, _MAX),
+                        idle_timeout=_IDLE_TIMEOUT_S, dependencies=_DEPS,
+                        volume=volume, env=env)(handler)
     return Endpoint(name=plan.name, cpu=_CPU, datacenter=DataCenter.EU_RO_1,
                     workers=(0, _MAX), idle_timeout=_IDLE_TIMEOUT_S, dependencies=_DEPS,
-                    volume=volume, env={**plan.env, "HF_TOKEN": _HF_TOKEN})(handler)
+                    volume=volume, env=env)(handler)
 
 
 # One module attribute per endpoint (xet_dl_A, xet_dl_baseline, xet_dl_ms_0, ...).

@@ -363,9 +363,25 @@ exercise. Results:
   zero Model Store warm jobs completed. This matches the platform's Global-Volume
   restriction ("CPU endpoints don't support them"). **Conclusion:** the
   `modelstore` mechanism's declaration + worker code are correct and shipped, but
-  a real Model Store *measurement* requires GPU endpoints, which is out of scope
-  for this CPU download-timing testbed. shim (8.2×) and volumecache (2.7×) are the
-  two mechanisms this testbed can measure on CPU.
+  a real Model Store *measurement* requires GPU endpoints (added: `worker_gpu`
+  config → Flash `Endpoint(gpu=[...])`).
+
+- **(e) Model Store measured on GPU (2026-09-25) — a two-dimensional result.**
+  With `worker_gpu = "AMPERE_16,ADA_24"`, declaration + staging succeeded and warm
+  jobs completed. The driver now captures the platform's `delayTime` (placement/
+  staging wait) and `executionTime` separately, so the report is phase-fair:
+  - **Steady-state (once running):** warm read **~0.22s** vs baseline execution
+    **~6.0s** — Model Store is the fastest once a worker is running, and the
+    staging is unbilled to the caller.
+  - **Cold-start latency (submit→ready):** **~120s** vs baseline **~7.8s** — Model
+    Store is the *slowest* cold start; ~118.8s of it is provisioning-triggered
+    platform staging (`delayTime`, unbilled but caller-waited), recurring per cold
+    worker on scale-out (scales with model size/host availability — benchmark saw
+    34–70s for 3B/7B).
+  So Model Store is **cheapest+fastest once running** but **worst cold-start
+  latency** — not reducible to a single speedup. Final scoreboard: shim 8.2× and
+  volumecache 2.7× are clean end-to-end wins; Model Store is a different cost/
+  latency trade, reported as two claims.
 
 ## Measurement notes — cold-start latency vs steady-state (2026-09-25)
 

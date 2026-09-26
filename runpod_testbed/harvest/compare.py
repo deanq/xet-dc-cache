@@ -12,6 +12,12 @@ Usage:
     python -m runpod_testbed.harvest.compare shim=<runid> volumecache=<runid> modelstore=<runid>
 
 Any mechanism may be omitted.
+
+Optionally pin a single shared baseline run so every mechanism's speedup uses
+the same denominator (baselines otherwise vary run-to-run, e.g. CPU ~11s vs
+GPU ~5.8s, making per-mechanism baseline columns not directly comparable):
+
+    python -m runpod_testbed.harvest.compare shim=A volumecache=B modelstore=C baseline=A
 """
 from __future__ import annotations
 
@@ -85,14 +91,33 @@ def _warm_delay_median(rows: list, wall_buckets: dict) -> float:
     return st.median(delays) if delays else 0.0
 
 
-def mechanism_stats(mechanism: str, jobs: list) -> dict:
+def _compute_shared_baseline(runid: str) -> dict:
+    """Pin ONE baseline run as the reference for every mechanism, so the
+    speedup denominator is comparable across mechanisms measured on
+    different runs (CPU baselines run ~11s, the GPU baseline ~5.8s)."""
+    jobs = _load_mechanism_jobs("baseline", runid)
+    rows = timing_rows(jobs)
+    baseline_wall = _median_s(latency_by_schema_phase(rows).get("baseline"))
+    baseline_exec = _median_s(steady_state_by_schema_phase(rows).get("baseline"))
+    if baseline_wall is None or baseline_exec is None:
+        raise ValueError(
+            f"pinned baseline run {runid!r} (data/jobs-{runid}.jsonl) has no "
+            "baseline-phase rows to compute a shared baseline from")
+    return {"runid": runid, "baseline_wall": baseline_wall, "baseline_exec": baseline_exec}
+
+
+def mechanism_stats(mechanism: str, jobs: list, shared_baseline: dict | None = None) -> dict:
     rows = timing_rows(jobs)
     wall = latency_by_schema_phase(rows)
     exec_ = steady_state_by_schema_phase(rows)
 
-    baseline_wall = _median_s(wall.get("baseline"))
+    if shared_baseline is not None:
+        baseline_wall = shared_baseline["baseline_wall"]
+        baseline_exec = shared_baseline["baseline_exec"]
+    else:
+        baseline_wall = _median_s(wall.get("baseline"))
+        baseline_exec = _median_s(exec_.get("baseline"))
     warm_wall = _median_s(_pick_bucket(wall, _WARM_PHASE_PRIORITY))
-    baseline_exec = _median_s(exec_.get("baseline"))
     warm_exec = _median_s(_pick_bucket(exec_, _WARM_PHASE_PRIORITY))
 
     return {
@@ -107,32 +132,52 @@ def mechanism_stats(mechanism: str, jobs: list) -> dict:
     }
 
 
-def _header_lines(runids: dict[str, str], jobs_by_mechanism: dict[str, list]) -> list[str]:
+def _header_lines(runids: dict[str, str], jobs_by_mechanism: dict[str, list],
+                   shared_baseline: dict | None = None) -> list[str]:
     date_str = datetime.now().strftime("%Y-%m-%d")
     models = sorted({m for jobs in jobs_by_mechanism.values() for m in _model_names(jobs)})
     model_str = ", ".join(models) if models else "no models recorded"
     runid_str = "; ".join(f"{mech}={runids[mech]}" for mech in _MECHANISM_ORDER if mech in runids)
-    return [
+    lines = [
         "# Cache mechanism comparison", "",
         f"**{date_str} · models: {model_str} · runs: {runid_str}**", "",
     ]
+    if shared_baseline is not None:
+        lines += [
+            f"**Shared baseline: pinned from run `{shared_baseline['runid']}`** "
+            f"(wall {format_seconds(shared_baseline['baseline_wall'])}, "
+            f"steady-state {format_seconds(shared_baseline['baseline_exec'])}).", "",
+            "_Every mechanism's speedup below is computed against this one baseline, not its own "
+            "run's baseline, so the numbers are directly comparable — the pinned run's instance "
+            "type and conditions define the reference._", "",
+        ]
+    return lines
 
 
 def _speedup_str(speedup: float | None) -> str:
     return f"{speedup:.2f}×" if speedup is not None else "n/a"
 
 
-def _coldstart_table(stats_list: list[dict]) -> list[str]:
+def _table_header(shared_baseline: dict | None, baseline_label: str) -> list[str]:
+    if shared_baseline is not None:
+        return [f"_baseline (shared, see above): {baseline_label}_", "",
+                "| mechanism | warm | speedup |", "|---|---|---|"]
+    return ["| mechanism | baseline | warm | speedup |", "|---|---|---|---|"]
+
+
+def _coldstart_table(stats_list: list[dict], shared_baseline: dict | None = None) -> list[str]:
     lines = [
         "## Cold-start latency (end-to-end)", "",
         "_What the caller actually waits: submit → ready._", "",
-        "| mechanism | baseline | warm | speedup |", "|---|---|---|---|",
     ]
+    lines += _table_header(shared_baseline, format_seconds(shared_baseline["baseline_wall"])
+                            if shared_baseline else "")
     footnotes = []
     for s in stats_list:
         significant = s["delay_median"] >= _SIGNIFICANT_DELAY_SECONDS
         marker = "\\*" if significant else ""
-        lines.append(f"| {s['mechanism']}{marker} | {format_seconds(s['baseline_wall'])} | "
+        baseline_cell = "" if shared_baseline else f"{format_seconds(s['baseline_wall'])} | "
+        lines.append(f"| {s['mechanism']}{marker} | {baseline_cell}"
                      f"{format_seconds(s['warm_wall'])} | {_speedup_str(s['coldstart_speedup'])} |")
         if significant:
             footnotes.append(
@@ -144,14 +189,16 @@ def _coldstart_table(stats_list: list[dict]) -> list[str]:
     return lines
 
 
-def _steadystate_table(stats_list: list[dict]) -> list[str]:
+def _steadystate_table(stats_list: list[dict], shared_baseline: dict | None = None) -> list[str]:
     lines = [
         "## Steady-state (once running)", "",
         "_Like-for-like: execution/read time only, queue and staging wait excluded._", "",
-        "| mechanism | baseline | warm | speedup |", "|---|---|---|---|",
     ]
+    lines += _table_header(shared_baseline, format_seconds(shared_baseline["baseline_exec"])
+                            if shared_baseline else "")
     for s in stats_list:
-        lines.append(f"| {s['mechanism']} | {format_seconds(s['baseline_exec'])} | "
+        baseline_cell = "" if shared_baseline else f"{format_seconds(s['baseline_exec'])} | "
+        lines.append(f"| {s['mechanism']} | {baseline_cell}"
                      f"{format_seconds(s['warm_exec'])} | {_speedup_str(s['steadystate_speedup'])} |")
     lines.append("")
     return lines
@@ -191,12 +238,16 @@ def _verdict_lines(stats_list: list[dict]) -> list[str]:
 
 
 def build_report(runids: dict[str, str]) -> tuple[str, str]:
-    jobs_by_mechanism = {m: _load_mechanism_jobs(m, r) for m, r in runids.items()}
-    stats_list = [mechanism_stats(m, jobs_by_mechanism[m])
+    mechanism_runids = {m: r for m, r in runids.items() if m != "baseline"}
+    baseline_runid = runids.get("baseline")
+    shared_baseline = _compute_shared_baseline(baseline_runid) if baseline_runid else None
+
+    jobs_by_mechanism = {m: _load_mechanism_jobs(m, r) for m, r in mechanism_runids.items()}
+    stats_list = [mechanism_stats(m, jobs_by_mechanism[m], shared_baseline)
                   for m in _MECHANISM_ORDER if m in jobs_by_mechanism]
-    lines = (_header_lines(runids, jobs_by_mechanism)
-             + _coldstart_table(stats_list)
-             + _steadystate_table(stats_list)
+    lines = (_header_lines(mechanism_runids, jobs_by_mechanism, shared_baseline)
+             + _coldstart_table(stats_list, shared_baseline)
+             + _steadystate_table(stats_list, shared_baseline)
              + _verdict_lines(stats_list))
     timestamp = datetime.now().strftime(_TIMESTAMP_FORMAT)
     return f"data/comparison-{timestamp}.md", "\n".join(lines)
@@ -206,7 +257,7 @@ def main() -> None:
     runids = _parse_args(sys.argv[1:])
     if not runids:
         raise SystemExit("usage: python -m runpod_testbed.harvest.compare "
-                          "shim=<runid> volumecache=<runid> modelstore=<runid>")
+                          "shim=<runid> volumecache=<runid> modelstore=<runid> [baseline=<runid>]")
     out_path, text = build_report(runids)
     os.makedirs("data", exist_ok=True)
     with open(out_path, "w") as fh:

@@ -3,6 +3,7 @@ import json
 import pytest
 
 from runpod_testbed.harvest.compare import (
+    _compute_shared_baseline,
     _parse_args,
     _load_mechanism_jobs,
     build_report,
@@ -133,3 +134,89 @@ def test_build_report_handles_missing_mechanism(tmp_path, monkeypatch):
     _, text = build_report({"shim": "shim-run"})
     assert "| shim |" in text
     assert "modelstore" not in text
+
+
+# --- shared baseline (baseline=<runid>) ---
+
+# A pinned baseline whose wall/exec medians differ sharply from both
+# SHIM_JOBS' own baseline (13.0s wall / 12.5s exec) and VOLUMECACHE_JOBS'
+# own baseline (13.0s wall / 12.5s exec) — lets tests distinguish "shared"
+# from "own-run" baseline values.
+PINNED_BASELINE_JOBS = [
+    _job("baseline", "baseline", 100.0, download_s=95.0),
+    _job("baseline", "baseline", 110.0, download_s=105.0),
+]
+
+NO_BASELINE_ROWS_JOBS = [
+    _job("shim", "warm", 1.5, download_s=1.4),
+]
+
+
+def test_compute_shared_baseline_reads_pinned_run(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_jobs(tmp_path, "pinned-run", PINNED_BASELINE_JOBS)
+    shared = _compute_shared_baseline("pinned-run")
+    assert shared["runid"] == "pinned-run"
+    assert shared["baseline_wall"] == pytest.approx(105.0)
+    assert shared["baseline_exec"] == pytest.approx(100.0)
+
+
+def test_compute_shared_baseline_raises_on_missing_baseline_rows(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_jobs(tmp_path, "no-baseline-run", NO_BASELINE_ROWS_JOBS)
+    with pytest.raises(ValueError, match="no baseline-phase rows"):
+        _compute_shared_baseline("no-baseline-run")
+
+
+def test_compute_shared_baseline_missing_jobs_file_raises(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileNotFoundError, match="no jobs file"):
+        _compute_shared_baseline("doesnotexist")
+
+
+def test_mechanism_stats_shared_baseline_overrides_own_run_baseline():
+    shared = {"runid": "pinned-run", "baseline_wall": 105.0, "baseline_exec": 100.0}
+    s = mechanism_stats("shim", SHIM_JOBS, shared_baseline=shared)
+    assert s["baseline_wall"] == 105.0
+    assert s["baseline_exec"] == 100.0
+    # differs from shim's own-run baseline (13.0s wall / 12.5s exec)
+    own = mechanism_stats("shim", SHIM_JOBS)
+    assert own["baseline_wall"] != s["baseline_wall"]
+    assert own["baseline_exec"] != s["baseline_exec"]
+
+
+def test_build_report_with_pinned_baseline_uses_same_denominator_for_all_mechanisms(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_jobs(tmp_path, "shim-run", SHIM_JOBS)
+    _write_jobs(tmp_path, "vc-run", VOLUMECACHE_JOBS)
+    _write_jobs(tmp_path, "pinned-run", PINNED_BASELINE_JOBS)
+    _, text = build_report({"shim": "shim-run", "volumecache": "vc-run", "baseline": "pinned-run"})
+    assert "pinned from run `pinned-run`" in text
+    assert "directly comparable" in text
+    # shared baseline value appears once (in the header note); the per-mechanism
+    # baseline column is gone from both tables.
+    assert "| baseline |" not in text
+    assert text.count("105.0s") >= 1
+
+
+def test_build_report_pinned_baseline_speedups_share_denominator(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_jobs(tmp_path, "shim-run", SHIM_JOBS)
+    _write_jobs(tmp_path, "vc-run", VOLUMECACHE_JOBS)
+    _write_jobs(tmp_path, "pinned-run", PINNED_BASELINE_JOBS)
+    shared = _compute_shared_baseline("pinned-run")
+    shim_jobs = _load_mechanism_jobs("shim", "shim-run")
+    vc_jobs = _load_mechanism_jobs("volumecache", "vc-run")
+    shim_stats = mechanism_stats("shim", shim_jobs, shared)
+    vc_stats = mechanism_stats("volumecache", vc_jobs, shared)
+    assert shim_stats["baseline_wall"] == vc_stats["baseline_wall"] == shared["baseline_wall"]
+    assert shim_stats["baseline_exec"] == vc_stats["baseline_exec"] == shared["baseline_exec"]
+
+
+def test_build_report_without_baseline_arg_is_unchanged(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_jobs(tmp_path, "shim-run", SHIM_JOBS)
+    _write_jobs(tmp_path, "vc-run", VOLUMECACHE_JOBS)
+    _, text = build_report({"shim": "shim-run", "volumecache": "vc-run"})
+    assert "| mechanism | baseline | warm | speedup |" in text
+    assert "pinned from run" not in text

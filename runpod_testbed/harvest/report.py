@@ -88,8 +88,9 @@ def peering_payoff(metric_rows: list) -> dict:
 
 
 SCHEMA_KEYS = frozenset({"mechanism", "phase", "model", "wall_seconds", "bytes",
-                         "breakdown", "worker_cold", "ok"})
+                         "breakdown", "worker_cold", "ok", "delay_seconds", "exec_seconds"})
 SCHEMA_PHASES = ("baseline", "populate", "warm")
+_MODELSTORE_MECHANISM = "modelstore"
 
 
 def report_path(mechanism: str, runid: str) -> str:
@@ -108,6 +109,35 @@ def _stats(secs: list, total_bytes: int) -> dict:
     secs = sorted(secs)
     return {"n": len(secs), "median_s": st.median(secs),
             "p95_s": secs[max(0, round(0.95 * len(secs)) - 1)], "total_bytes": total_bytes}
+
+
+def _breakdown_fallback_seconds(breakdown: dict) -> float | None:
+    """Sum whatever handler-reported breakdown fields a mechanism populated
+    (download_s / hydrate_s / local_read_s) — used only when the platform
+    didn't report exec_seconds for a row (e.g. pre-upgrade jobs files)."""
+    vals = [v for v in breakdown.values() if v is not None]
+    return sum(vals) if vals else None
+
+
+def _steady_seconds(row: dict) -> float | None:
+    """Once-running work time: the platform's own executionTime when present,
+    else the handler breakdown as a fallback. Excludes queue time and the
+    placement/staging wait (`delay_seconds`) that dominates a Model Store
+    cold worker's end-to-end wall — this is the like-for-like number."""
+    exec_seconds = row.get("exec_seconds")
+    return exec_seconds if exec_seconds is not None else _breakdown_fallback_seconds(row["breakdown"])
+
+
+def steady_state_by_schema_phase(rows: list) -> dict:
+    buckets: dict = {}
+    for r in rows:
+        if not r["ok"]:
+            continue
+        seconds = _steady_seconds(r)
+        if seconds is None:
+            continue
+        buckets.setdefault(r["phase"], []).append((seconds, r["bytes"]))
+    return {p: _stats([s for s, _ in vs], sum(b for _, b in vs)) for p, vs in buckets.items()}
 
 
 def latency_by_schema_phase(rows: list) -> dict:
@@ -216,9 +246,41 @@ def _header_lines(runid: str, mechanism: str, jobs: list, state) -> list[str]:
             f"**{_run_datetime(runid)} · models: {model_str} · {_fleet_description(state)}**", ""]
 
 
-def _one_line_lines(jobs: list, metrics_rows: list) -> list[str]:
+def _one_line_modelstore(jobs: list) -> list[str]:
+    """Model Store's honest one-liner: TWO separate claims, not a single
+    speedup — its end-to-end wall is inflated by unbilled platform staging
+    (see `_cold_vs_warm_lines`'s staging note and the "Steady-state" section),
+    so collapsing it to "Nx faster" would misrepresent which number is which."""
+    rows = timing_rows(jobs)
+    warm_e2e = latency_by_schema_phase(rows).get("warm")
+    lines = ["## In one line", ""]
+    if warm_e2e is None:
+        lines += ["_Not enough data yet — need at least one Model Store warm run._", ""]
+        return lines
+    warm_steady = steady_state_by_schema_phase(rows).get("warm")
+    steady_str = format_seconds(warm_steady["median_s"]) if warm_steady else "n/a"
+    lines += [
+        "Model Store is **two separate claims**, not one speedup:",
+        f"**(a) cheapest and fastest once running** — a warm worker's own execution/read time is "
+        f"**{steady_str}** (staging is unbilled to the caller);",
+        f"**(b) highest cold-start latency** — the caller's end-to-end wait is "
+        f"**{format_seconds(warm_e2e['median_s'])}**, dominated by the platform's placement/staging "
+        "wait, which recurs on every cold worker at scale-out.",
+        "",
+    ]
+    return lines
+
+
+def _one_line_lines(mechanism: str, jobs: list, metrics_rows: list) -> list[str]:
     """Plain-English money paragraph: cold time, warm time, speedup, and (if
-    this run has peering data) what fraction of miss bytes came from a peer."""
+    this run has peering data) what fraction of miss bytes came from a peer.
+
+    Model Store is framed separately (`_one_line_modelstore`) — a single
+    baseline/warm speedup would blend its unbilled staging wait into the
+    headline, which is the exact asymmetry this report exists to correct.
+    """
+    if mechanism == _MODELSTORE_MECHANISM:
+        return _one_line_modelstore(jobs)
     h = headline_vs_baseline(timing_rows(jobs))
     lines = ["## In one line", ""]
     if h["speedup"] is None:
@@ -252,11 +314,32 @@ def _phase_description(mechanism: str, phase: str) -> str:
     return _PHASE_DESCRIPTIONS.get(mechanism, {}).get(phase, phase)
 
 
+def _staging_note_lines(rows: list) -> list[str]:
+    """Called out only for a mechanism whose warm rows carry a real
+    `delay_seconds` (Model Store): most of its cold-start latency is
+    provisioning-triggered platform staging (`delayTime`), which is unbilled —
+    but it recurs on every cold worker at scale-out, so it's real caller-facing
+    latency, not something to explain away."""
+    warm_delays = [r["delay_seconds"] for r in rows if r["phase"] == "warm" and r["delay_seconds"]]
+    if not warm_delays:
+        return []
+    return [f"_A large share of this end-to-end wait (median **{format_seconds(st.median(warm_delays))}**) "
+            "is **provisioning-triggered platform staging** (`delayTime`), which is unbilled — but it "
+            "recurs on every cold worker at scale-out. See \"Steady-state\" below for the once-running, "
+            "like-for-like number._", ""]
+
+
 def _cold_vs_warm_lines(mechanism: str, jobs: list) -> list[str]:
-    lat = latency_by_schema_phase(timing_rows(jobs))
+    """The end-to-end "cold-start latency" view — what the caller actually
+    waits (queue + placement/staging + execution). This is the real number a
+    caller experiences; it is not "misleading", just not the only story for a
+    mechanism (Model Store) whose acquisition happens outside the handler."""
+    rows = timing_rows(jobs)
+    lat = latency_by_schema_phase(rows)
     if not lat:
-        return ["## Cold vs warm", "", "_No timing data captured for this run._", ""]
-    lines = ["## Cold vs warm", "",
+        return ["## Cold-start latency (end-to-end)", "", "_No timing data captured for this run._", ""]
+    lines = ["## Cold-start latency (end-to-end)", "",
+             "_What the caller actually waits: submit → ready (queue + placement/staging + execution)._", "",
              "| stage | what it measures | runs | median | data |", "|---|---|---|---|---|"]
     for phase in SCHEMA_PHASES:
         if phase not in lat:
@@ -264,10 +347,36 @@ def _cold_vs_warm_lines(mechanism: str, jobs: list) -> list[str]:
         d = lat[phase]
         lines.append(f"| {phase} | {_phase_description(mechanism, phase)} | {d['n']} | "
                      f"{format_seconds(d['median_s'])} | {format_bytes(d['total_bytes'])} |")
-    h = headline_vs_baseline(timing_rows(jobs))
     lines.append("")
-    if h["speedup"] is not None:
-        lines += [f"_Warm reads are **{h['speedup']:.1f}×** faster than going to HuggingFace._", ""]
+    if mechanism == _MODELSTORE_MECHANISM:
+        lines += _staging_note_lines(rows)
+    else:
+        h = headline_vs_baseline(rows)
+        if h["speedup"] is not None:
+            lines += [f"_Warm reads are **{h['speedup']:.1f}×** faster than going to HuggingFace._", ""]
+    return lines
+
+
+def _steady_state_lines(mechanism: str, jobs: list) -> list[str]:
+    """The like-for-like "once running" view: execution time only, queue +
+    placement/staging wait excluded. This is the fair warm-vs-warm scoreboard
+    across mechanisms — shim/volumecache's in-handler work vs Model Store's
+    in-handler read, none of it inflated by platform staging."""
+    rows = timing_rows(jobs)
+    lat = steady_state_by_schema_phase(rows)
+    if not lat:
+        return []
+    lines = ["## Steady-state (once running)", "",
+             "_Like-for-like: execution/read time only, with queue and placement/staging wait excluded. "
+             "This is who's fastest once a worker is actually running._", "",
+             "| stage | what it measures | runs | median | data |", "|---|---|---|---|---|"]
+    for phase in SCHEMA_PHASES:
+        if phase not in lat:
+            continue
+        d = lat[phase]
+        lines.append(f"| {phase} | {_phase_description(mechanism, phase)} | {d['n']} | "
+                     f"{format_seconds(d['median_s'])} | {format_bytes(d['total_bytes'])} |")
+    lines.append("")
     return lines
 
 
@@ -289,8 +398,9 @@ def _coldstart_lines(jobs: list) -> list[str]:
 
 def render_timing_core(runid: str, mechanism: str, jobs: list, metrics_rows: list, state) -> list[str]:
     return (_header_lines(runid, mechanism, jobs, state)
-            + _one_line_lines(jobs, metrics_rows)
+            + _one_line_lines(mechanism, jobs, metrics_rows)
             + _cold_vs_warm_lines(mechanism, jobs)
+            + _steady_state_lines(mechanism, jobs)
             + _coldstart_lines(jobs))
 
 

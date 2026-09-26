@@ -52,13 +52,38 @@ def start_jobs_file(path: str) -> None:
 
 SEQUENTIAL_PHASES = ("baseline", "cold", "populate")
 
+_MS_PER_SECOND = 1000
 
-def record(job: dict, result: dict, submit_ts: float, path: str) -> None:
+
+def _platform_timing(handle) -> tuple:
+    """Read the platform's placement/staging wait + execution time off the raw
+    job status (`Job._fetch_job()` — unlike `job.status()`, which returns only
+    the status string, this returns the full status JSON including
+    `delayTime`/`executionTime` in milliseconds for serverless jobs).
+
+    This is supplementary detail, not the load-bearing measurement (that's
+    still driver-observed `wall_seconds`), so any failure to fetch or read it
+    degrades to (None, None) rather than crashing the driver.
+    """
+    try:
+        status = handle._fetch_job()
+    except Exception:
+        return None, None
+    delay_ms = status.get("delayTime")
+    exec_ms = status.get("executionTime")
+    delay_seconds = delay_ms / _MS_PER_SECOND if delay_ms is not None else None
+    exec_seconds = exec_ms / _MS_PER_SECOND if exec_ms is not None else None
+    return delay_seconds, exec_seconds
+
+
+def record(job: dict, result: dict, submit_ts: float, path: str, *,
+          delay_seconds: float | None = None, exec_seconds: float | None = None) -> None:
     return_ts = time.time()
     row = {**job, "submit_ts": submit_ts, "return_ts": return_ts, "result": result}
     if "mechanism" in job:  # shared timing schema (spec) — driver-observed wall
         from runpod_testbed.worker.timing import make_timing_row
-        row["timing"] = make_timing_row(job["mechanism"], job, result, return_ts - submit_ts)
+        row["timing"] = make_timing_row(job["mechanism"], job, result, return_ts - submit_ts,
+                                        delay_seconds=delay_seconds, exec_seconds=exec_seconds)
     with open(path, "a") as fh:
         fh.write(json.dumps(row) + "\n")
 
@@ -92,15 +117,17 @@ def _submit_and_wait(eid: str, job: dict, jobs_path: str, timeout_s: int) -> Non
     # error from the Runpod API during polling (e.g. requests.ReadTimeout on the
     # SDK's 10s status GET) must not kill the burst pool and abort the whole run.
     # Record it (with the last status if reachable) and move on.
+    delay_seconds = exec_seconds = None
     try:
         result = handle.output(timeout=timeout_s)
+        delay_seconds, exec_seconds = _platform_timing(handle)
     except Exception as e:
         try:
             status = handle.status()
         except Exception:
             status = None
         result = {"ok": False, "error": f"{type(e).__name__}: {e}", "status": status}
-    record(job, result, submit_ts, jobs_path)
+    record(job, result, submit_ts, jobs_path, delay_seconds=delay_seconds, exec_seconds=exec_seconds)
 
 
 def main(argv: list | None = None) -> None:

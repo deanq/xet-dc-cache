@@ -135,8 +135,19 @@ def schema_phase(job_phase: str) -> str:
     return _PHASE_ALIAS.get(job_phase, job_phase)
 
 
-def make_timing_row(mechanism: str, job: dict, result: dict, wall_seconds: float) -> dict:
-    """The spec's shared timing schema — one row per driver job."""
+def make_timing_row(mechanism: str, job: dict, result: dict, wall_seconds: float, *,
+                    delay_seconds: float | None = None, exec_seconds: float | None = None) -> dict:
+    """The spec's shared timing schema — one row per driver job.
+
+    `delay_seconds`/`exec_seconds` are the platform's own placement/staging wait
+    and execution time (Runpod job status `delayTime`/`executionTime`, read by
+    `drive/run.py`). They are optional and default to None so mechanisms/rows
+    that don't carry them (or pre-existing jobs files) stay valid. They let
+    `harvest/report.py` build a like-for-like "steady-state" view alongside the
+    end-to-end `wall_seconds` "cold-start latency" view — this matters most for
+    Model Store, whose acquisition happens outside the handler as unbilled
+    platform staging that inflates `wall_seconds` without inflating actual work.
+    """
     per_model = (result.get("results") or [{}])[0]
     return {
         "mechanism": mechanism,
@@ -147,4 +158,6 @@ def make_timing_row(mechanism: str, job: dict, result: dict, wall_seconds: float
         "breakdown": {**EMPTY_BREAKDOWN, **per_model.get("breakdown", {})},
         "worker_cold": bool(result.get("cold_first_invocation", False)),
         "ok": bool(per_model.get("ok", False)),
+        "delay_seconds": delay_seconds,
+        "exec_seconds": exec_seconds,
     }

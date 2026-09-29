@@ -81,7 +81,11 @@ def _pod_env(runid: str, fleet_size: int, environ) -> dict:
             "SHIM_AUTH_TOKEN": environ.get("SHIM_AUTH_TOKEN", ""),
             "RUNPOD_API_KEY": environ["RUNPOD_API_KEY"],
             "FLEET_PREFIX": f"xet-cache-{runid}-",
-            "FLEET_SIZE": str(fleet_size)}
+            "FLEET_SIZE": str(fleet_size),
+            # A/B seam: forward the controller's STREAM_CACHE_HITS to the pods so a
+            # run can compare buffered vs streamed cache-hit serving. Empty (the
+            # default) leaves the shim on its buffered path.
+            "STREAM_CACHE_HITS": environ.get("STREAM_CACHE_HITS", "")}
 
 
 class ShimMechanism:
@@ -138,7 +142,8 @@ class ShimMechanism:
         print(f"shim teardown done; errored (tolerated): {errored}")
 
     def report_sections(self, jobs: list, metrics_rows: list, state) -> list[str]:
-        from runpod_testbed.harvest.report import format_bytes, format_percent, peering_payoff, pod_label
+        from runpod_testbed.harvest.report import (
+            format_bytes, format_percent, heap_peak_bytes, peering_payoff, pod_label)
         if not metrics_rows:
             return ["## Per-pod cache effectiveness", "", _NO_METRICS, "",
                     "## Where the bytes came from (peering)", "", _NO_METRICS, ""]
@@ -149,4 +154,10 @@ class ShimMechanism:
                          f"{format_bytes(d['wan_bytes_saved'])} |")
         lines += ["", "## Where the bytes came from (peering)", ""]
         lines += _peering_lines(peering_payoff(metrics_rows), format_bytes, format_percent)
+        peak = heap_peak_bytes(metrics_rows)
+        if peak:
+            lines += ["## Peak shim heap (RSS proxy)", "",
+                      f"Highest `xet_heap_inuse_bytes` on any pod this run: **{format_bytes(peak)}**. "
+                      f"Compare across a `STREAM_CACHE_HITS=1` run vs the default: buffered serving "
+                      f"peaks with concurrency × range size, streamed serving stays flat.", ""]
         return lines

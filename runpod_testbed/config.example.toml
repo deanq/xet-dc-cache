@@ -27,6 +27,10 @@ burst = 4
 max_burst = 8
 
 # ---- shim (only read when mechanism = "shim") -------------------------------
+# A/B seam: set the controller env STREAM_CACHE_HITS=1 before `make up` to make
+# the shim stream cache HITs (io.Copy + flush) instead of buffering the whole
+# body. The pod's peak xet_heap_inuse_bytes (reported under "Peak shim heap")
+# then shows the memory difference vs a default (buffered) run.
 [shim]
 registry = "docker.io/CHANGEME"             # your container registry
 cache_image = "CHANGEME/xet-cache-testbed:latest"  # image running the cache shim

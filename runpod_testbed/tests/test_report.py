@@ -47,6 +47,22 @@ def test_peering_payoff_uses_final_sample():
     assert abs(out["peer_fraction"] - 0.3) < 1e-9
 
 
+def test_heap_peak_bytes_returns_max_across_samples_and_pods():
+    from runpod_testbed.harvest.report import heap_peak_bytes
+    rows = [
+        {"pod": "A", "ts": 1, "name": "xet_heap_inuse_bytes", "labels": {}, "value": 100},
+        {"pod": "A", "ts": 2, "name": "xet_heap_inuse_bytes", "labels": {}, "value": 900},  # peak on A
+        {"pod": "B", "ts": 1, "name": "xet_heap_inuse_bytes", "labels": {}, "value": 500},
+        {"pod": "A", "ts": 3, "name": "xet_heap_inuse_bytes", "labels": {}, "value": 200},
+    ]
+    assert heap_peak_bytes(rows) == 900  # max over all samples/pods, not the final sample
+
+
+def test_heap_peak_bytes_zero_when_absent():
+    from runpod_testbed.harvest.report import heap_peak_bytes
+    assert heap_peak_bytes([{"pod": "A", "ts": 1, "name": "xet_hits_total", "labels": {}, "value": 3}]) == 0.0
+
+
 COLD_JOBS = [
     {"result": {"cold_first_invocation": True, "dep_upgrade_ms": 15000,
                 "results": [{"ok": True, "wall_seconds": 40.0}]}},

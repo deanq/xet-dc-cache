@@ -1,5 +1,5 @@
 from runpod_testbed.mechanisms.base import BASELINE_LABEL, ProvisionState, WorkerSpec
-from runpod_testbed.mechanisms.shim import ShimMechanism
+from runpod_testbed.mechanisms.shim import ShimMechanism, _pod_env
 from runpod_testbed.provision.down import ENDPOINTS
 from runpod_testbed.tests.test_provision import _cfg
 
@@ -25,6 +25,13 @@ def _cfg3():
     from dataclasses import replace
     return replace(_cfg(), models=["x", "y", "z"],
                    overlap={"A": ["x", "y"], "B": ["y", "z"], "C": ["z", "x"]})
+
+
+def test_shim_pod_env_forwards_stream_cache_hits():
+    on = _pod_env("r1", 3, {"RUNPOD_API_KEY": "rk", "STREAM_CACHE_HITS": "1"})
+    assert on["STREAM_CACHE_HITS"] == "1"           # controller toggle reaches the pod
+    off = _pod_env("r1", 3, {"RUNPOD_API_KEY": "rk"})
+    assert off["STREAM_CACHE_HITS"] == ""           # absent -> empty -> shim default (off)
 
 
 def test_shim_identity_and_worker_spec():

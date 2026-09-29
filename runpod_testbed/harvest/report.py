@@ -73,6 +73,22 @@ def _final_by_pod(rows, name):
     return sum(v for _, v in latest.values())
 
 
+def heap_peak_bytes(metric_rows: list) -> float:
+    """Max xet_heap_inuse_bytes observed on any pod across the whole run.
+
+    Unlike the counters (read at their final sample), the streaming-vs-buffered
+    signal is the PEAK: buffered whole-body writes make the heap spike with
+    concurrency * range size, while streamed hits (io.Copy) keep it flat. Scrape
+    samples the gauge each cycle, so the max across samples approximates burst
+    peak RSS. 0.0 when the gauge is absent (older image / no metrics scraped).
+    """
+    peak = 0.0
+    for r in metric_rows:
+        if r["name"] == "xet_heap_inuse_bytes" and not r["labels"] and r["value"] > peak:
+            peak = r["value"]
+    return peak
+
+
 def peering_payoff(metric_rows: list) -> dict:
     peer = _final_by_pod(metric_rows, "xet_peer_bytes_total")
     wan = _final_by_pod(metric_rows, "xet_wan_bytes_total")

@@ -31,6 +31,23 @@ All workers are CPU download-timing workers; nothing is loaded into VRAM.
 top of the mechanism's own pulls. CPU-only + mandatory teardown keeps this to
 cents per run; the baseline is what makes runs comparable, so do not skip it.
 
+### shim specifics
+
+- **Streaming vs buffered cache-hit serving (`STREAM_CACHE_HITS`).** The shim
+  streams disk HITs by default (`io.Copy` + header flush; O(1) time-to-first-byte,
+  flat per-hit heap). To A/B it against the legacy buffered path, set the
+  controller env before `make up` — it is forwarded to every cache pod:
+  ```bash
+  STREAM_CACHE_HITS=0 make -C runpod_testbed up   # buffered baseline
+  # (default, or STREAM_CACHE_HITS=1)             # streamed
+  ```
+  The report's **"Peak shim heap"** section (max `xet_heap_inuse_bytes` across
+  scrape samples) is the signal: buffered peaks with concurrency × range size,
+  streamed stays flat. Use a high `burst` and a tight `scrape_interval_s` (e.g. 1)
+  to catch the peak. See `docs/network-transport-feasibility.md` for measured
+  results and the confounds (the whole-heap gauge also includes the unchanged
+  MISS-path buffers, plus Flash run-to-run variance).
+
 ### volumecache specifics
 
 - `make up MECHANISM=volumecache` deploys `xet-dl-volumecache` with a network
@@ -361,7 +378,8 @@ make -C runpod_testbed report RUNID=<runid>
 ```
 
 Reads `data/jobs-<runid>.jsonl` + `data/pod-metrics-<runid>.parquet` and
-produces latency-by-phase and peering-payoff summaries.
+produces latency-by-phase, peering-payoff, and (for the shim) **Peak shim heap**
+(`xet_heap_inuse_bytes`, the streaming-vs-buffered signal) summaries.
 
 Each job's worker result also carries `cold_first_invocation` (bool, set on
 the very first invocation of a given Flash endpoint, before `_UPGRADED` is

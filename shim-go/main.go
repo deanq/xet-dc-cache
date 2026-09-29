@@ -156,7 +156,7 @@ func main() {
 		signedCandidates: envInt("SIGNED_CANDIDATES_PER_XORB", 8),
 		sem:              sem,
 		authToken:        env("SHIM_AUTH_TOKEN", ""),
-		streamHits:       envBool("STREAM_CACHE_HITS", false),
+		streamHits:       envBool("STREAM_CACHE_HITS", true),
 		peer: peerEngine{
 			doer:         peerClient,
 			peers:        peers,

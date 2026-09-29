@@ -65,12 +65,15 @@ serving a xorb-sized blob under a concurrent burst:
 - **Total wall doesn't regress**, and improves ~20% under load (buffered's
   multi-GB alloc/GC churn steals CPU/bandwidth).
 
-**Shipped:** `STREAM_CACHE_HITS` (default off) streams the **disk-HIT path** —
-the warm case, the cache's whole point; a complete cached file is safe to
-`io.Copy`. Both paths set `Content-Length` explicitly so wire framing is
-identical (identity, not chunked). The MISS path (which would need a
-write-to-client-while-writing-to-cache tee, interacting with the atomic-write
-invariant) is deliberately out of scope.
+**Shipped (default on):** `STREAM_CACHE_HITS` streams the **disk-HIT path** — the
+warm case, the cache's whole point; a complete cached file is safe to `io.Copy`.
+It defaults **on** (set `STREAM_CACHE_HITS=0` to force the legacy buffered path).
+Both paths set `Content-Length` explicitly so wire framing is identical (identity,
+not chunked). The MISS path (which would need a write-to-client-while-writing-to-
+cache tee, interacting with the atomic-write invariant) is deliberately out of
+scope. Validated end-to-end: the `make test-e2e` peering scenarios (local-cache-
+hit and peer-served hit) are byte-identical through real `hf_xet` with streaming
+enabled.
 
 **Other client↔shim items:** add inbound server timeouts (`http.Server` sets
 none — a slowloris/hardening gap); h2c/UDS are low-value (loopback is already
@@ -99,8 +102,9 @@ payoff on a synthesized high-BDP link.
   burst's peak RSS is observable. The report's "Peak shim heap" is the max across
   scrape samples (coarse: GC between 5 s scrapes can understate the true peak;
   use it as an A/B signal, not an absolute).
-- Testbed A/B seam: `STREAM_CACHE_HITS` forwarded to pods; run stream-off vs
-  stream-on and compare peak heap.
+- Testbed A/B seam: `STREAM_CACHE_HITS` forwarded to pods; since streaming is now
+  the default, compare a `STREAM_CACHE_HITS=0` (buffered) run against the default
+  and diff peak heap.
 
 ## Live confirmations (Runpod, 2026-09-28)
 

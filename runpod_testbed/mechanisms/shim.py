@@ -158,6 +158,7 @@ class ShimMechanism:
         if peak:
             lines += ["## Peak shim heap (RSS proxy)", "",
                       f"Highest `xet_heap_inuse_bytes` on any pod this run: **{format_bytes(peak)}**. "
-                      f"Compare across a `STREAM_CACHE_HITS=1` run vs the default: buffered serving "
-                      f"peaks with concurrency × range size, streamed serving stays flat.", ""]
+                      f"Streaming cache hits is the default; compare against a `STREAM_CACHE_HITS=0` "
+                      f"(buffered) run to see the memory it avoids — buffered serving peaks with "
+                      f"concurrency × range size, streamed serving stays flat.", ""]
         return lines

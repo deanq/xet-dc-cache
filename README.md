@@ -174,6 +174,8 @@ docs/        Design + reference prose (see below).
 - `docs/cache-topology.md` — host-level vs DC-level shim placement: trade-offs,
   the per-host + peering default, storage/eviction sizing, and the go/no-go gate.
 - `docs/lfs-support-handoff.md` — proposed follow-up: add git-LFS caching to the Go shim.
+- `docs/network-transport-feasibility.md` — HTTP/3 QUIC peering (no-go) and the
+  measured client↔shim streaming win (`STREAM_CACHE_HITS`) + TCP-tuning notes.
 - `docs/superpowers/specs/2026-09-03-peer-transfer-optimization-design.md` — the
   tuned peer transport + adaptive hedge (bounded per-race slack vs. WAN) design.
 - `docs/superpowers/` — the spec + plan + acceptance notes for the Go rewrite.

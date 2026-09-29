@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,17 @@ func (d *countingDoer) Do(req *http.Request) (*http.Response, error) {
 	h := http.Header{}
 	h.Set("Content-Range", "bytes 0-4/999")
 	return &http.Response{StatusCode: 206, Body: io.NopCloser(strings.NewReader("BYTES")), Header: h}, nil
+}
+
+// sizedDoer authorizes any url and returns n bytes (0x61 'a'), for exercising
+// the streamed io.Copy path on a body larger than net/http's write buffer.
+type sizedDoer struct{ n int }
+
+func (d *sizedDoer) Do(req *http.Request) (*http.Response, error) {
+	h := http.Header{}
+	h.Set("Content-Range", "bytes 0-"+strconv.Itoa(d.n-1)+"/999999")
+	body := strings.Repeat("a", d.n)
+	return &http.Response{StatusCode: 206, Body: io.NopCloser(strings.NewReader(body)), Header: h}, nil
 }
 
 func newXorbTestServer(t *testing.T, doer httpDoer) *Server {
@@ -72,21 +84,27 @@ func TestGetXorbMissThenHit(t *testing.T) {
 // Content-Type, and body. Streaming only changes HOW the cached file reaches the
 // client (io.Copy from disk vs whole-body Write), never WHAT reaches it.
 func TestGetXorbStreamingHitParity(t *testing.T) {
-	seed := func() (*Server, *countingDoer) {
-		d := &countingDoer{}
+	// A multi-KB range exercises the real io.Copy body path (not just a 5-byte
+	// toy), and Content-Length is asserted so the buffered/streamed wire framing
+	// (identity, not chunked) is genuinely identical — the recorder records the
+	// explicitly-set Content-Length, so this catches the framing divergence a
+	// bare-Write vs flush-then-copy would otherwise cause.
+	rng := "bytes=0-8191"
+	seed := func() *Server {
+		d := &sizedDoer{n: 8192}
 		s := newXorbTestServer(t, d)
 		s.signed.Set("h", []string{"http://cdn/x"})
-		doGetXorb(s, "h", "bytes=0-4") // MISS -> populate the cache file
-		return s, d
+		doGetXorb(s, "h", rng) // MISS -> populate the cache file
+		return s
 	}
 
-	sBuf, _ := seed()
+	sBuf := seed()
 	sBuf.streamHits = false
-	buf := doGetXorb(sBuf, "h", "bytes=0-4")
+	buf := doGetXorb(sBuf, "h", rng)
 
-	sStr, _ := seed()
+	sStr := seed()
 	sStr.streamHits = true
-	str := doGetXorb(sStr, "h", "bytes=0-4")
+	str := doGetXorb(sStr, "h", rng)
 
 	if buf.Header().Get("X-Cache") != "HIT" || str.Header().Get("X-Cache") != "HIT" {
 		t.Fatalf("both must be HIT: buffered=%s streamed=%s",
@@ -95,14 +113,40 @@ func TestGetXorbStreamingHitParity(t *testing.T) {
 	if buf.Code != str.Code {
 		t.Fatalf("code mismatch: buffered=%d streamed=%d", buf.Code, str.Code)
 	}
-	if buf.Body.String() != str.Body.String() || str.Body.String() != "BYTES" {
-		t.Fatalf("body mismatch: buffered=%q streamed=%q", buf.Body.String(), str.Body.String())
+	if buf.Body.Len() != 8192 || buf.Body.String() != str.Body.String() {
+		t.Fatalf("body mismatch: buffered=%d bytes streamed=%d bytes", buf.Body.Len(), str.Body.Len())
 	}
-	for _, h := range []string{"Content-Range", "Accept-Ranges", "Content-Type"} {
+	for _, h := range []string{"Content-Range", "Accept-Ranges", "Content-Type", "Content-Length"} {
 		if buf.Header().Get(h) != str.Header().Get(h) {
 			t.Fatalf("%s mismatch: buffered=%q streamed=%q",
 				h, buf.Header().Get(h), str.Header().Get(h))
 		}
+	}
+	if str.Header().Get("Content-Length") != "8192" {
+		t.Fatalf("Content-Length = %q, want 8192 (identity framing)", str.Header().Get("Content-Length"))
+	}
+}
+
+// With streaming on but no cached file, getXorb must fall through to the miss
+// path exactly as the buffered branch does — the genuinely new control flow.
+func TestGetXorbStreamingFallsThroughToMiss(t *testing.T) {
+	d := &countingDoer{}
+	s := newXorbTestServer(t, d)
+	s.streamHits = true
+	s.signed.Set("h", []string{"http://cdn/x"})
+
+	rec := doGetXorb(s, "h", "bytes=0-4")
+	if rec.Code != 206 || rec.Header().Get("X-Cache") != "MISS" || rec.Body.String() != "BYTES" {
+		t.Fatalf("stream miss: code=%d xcache=%s body=%q",
+			rec.Code, rec.Header().Get("X-Cache"), rec.Body.String())
+	}
+	if atomic.LoadInt32(&d.n) != 1 {
+		t.Fatalf("fetched %d times, want 1", d.n)
+	}
+	// And the just-written file is now a streamed HIT.
+	rec2 := doGetXorb(s, "h", "bytes=0-4")
+	if rec2.Header().Get("X-Cache") != "HIT" {
+		t.Fatalf("second req should be a streamed HIT, got %s", rec2.Header().Get("X-Cache"))
 	}
 }
 

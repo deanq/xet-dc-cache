@@ -36,6 +36,20 @@ func TestPrometheusText(t *testing.T) {
 	}
 }
 
+// The heap-inuse gauge lets scrapers observe the shim's live Go heap so a
+// concurrent burst's peak RSS is measurable (the streaming-vs-buffered win).
+func TestPrometheusHeapGauge(t *testing.T) {
+	s := &Server{metrics: NewMetrics(), signed: NewTTLMap(1, 1, nil), lru: newLRU(0, 0, nil, func(string) {})}
+	out := s.prometheusText()
+	if !strings.Contains(out, "# TYPE xet_heap_inuse_bytes gauge\n") {
+		t.Errorf("missing heap-inuse TYPE line in exposition:\n%s", out)
+	}
+	// The sample must be present and parseable (a bare number after the name).
+	if !strings.Contains(out, "\nxet_heap_inuse_bytes ") {
+		t.Errorf("missing heap-inuse sample in exposition:\n%s", out)
+	}
+}
+
 // Every metric must carry a TYPE line (scrapers reject bare samples in strict
 // mode) — guard against adding a sample without its header.
 func TestPrometheusEveryMetricHasType(t *testing.T) {

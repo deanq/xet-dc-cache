@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -50,6 +51,13 @@ func (s *Server) prometheusText() string {
 		"Distinct xorb hashes with a live signed CDN url.", int64(s.signed.Len()))
 	promMetric(&b, "xet_cache_bytes", "gauge",
 		"Bytes currently accounted in the Tier 1 LRU.", s.lru.TotalBytes())
+	// Live Go heap, read per scrape so a concurrent-burst peak is observable.
+	// This is the quantity that separates buffered whole-body writes (RSS scales
+	// with concurrency * range size) from streamed hits (flat).
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	promMetric(&b, "xet_heap_inuse_bytes", "gauge",
+		"Go heap in use (bytes); per-scrape sample for observing burst peak RSS.", int64(mem.HeapInuse))
 	var throughput float64
 	if s.peer.stats != nil {
 		throughput = s.peer.stats.fleetThroughput()

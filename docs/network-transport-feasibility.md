@@ -102,8 +102,35 @@ payoff on a synthesized high-BDP link.
 - Testbed A/B seam: `STREAM_CACHE_HITS` forwarded to pods; run stream-off vs
   stream-on and compare peak heap.
 
-## Live confirmations
+## Live confirmations (Runpod, 2026-09-28)
 
-_Pending: (a) at-scale Flash run (large model, `xet_heap_inuse_bytes` off vs on)
-to confirm the memory win on real DC hardware; (b) `netem_tcp.py` on a Linux pod
-for the socket-buffer/BBR numbers. Results appended here when run._
+Both runs on real Runpod hardware; all resources torn down and verified clear
+(no lingering pods/volumes).
+
+### At-scale streaming A/B (3 peered CPU pods, burst=8, 1 s scrape)
+
+| run | peak `xet_heap_inuse_bytes` | workload realized |
+|---|---|---|
+| `STREAM_CACHE_HITS` off (buffered) | **4.0 GB** | 97/69/100% hit, 2.8 GB WAN, 7 cold jobs |
+| `STREAM_CACHE_HITS` on (streamed) | **2.2 GB** | 88/78/81% hit, 8.4 GB WAN, 20 cold jobs |
+
+Streaming cut peak heap **4.0 GB → 2.2 GB even though the streamed run did ~3× the
+WAN miss-fetching** — the direction is confirmed on real hardware. Two honest
+caveats: (1) the gauge captures the whole shim heap, so it also includes the
+**MISS-path `io.ReadAll` buffers, which this change does not touch** — that
+residual is why the streamed run still peaked at 2.2 GB, and it fingers the MISS
+tee as the next memory win; (2) Flash cold-start counts vary run-to-run, so the
+hit/miss mix isn't identical between the two runs. The *isolated* magnitude of the
+serve-path effect is the loopback benchmark above (3.8 GB → 5.5 MB), where only
+the serve path varied.
+
+### netem TCP-knobs
+
+The probe pod could not shape its link: **`tc` returned `RTNETLINK answers:
+Operation not permitted` — NET_ADMIN is denied inside a Runpod pod.** That denial
+is itself the finding: socket-buffer sizing and BBR **cannot be applied from
+inside the container** (shim or serverless worker). They are host/DC-operator
+knobs. So the peer-path TCP-tuning recommendation stands, but it is an
+infrastructure/host-config action, not a shim change — and it can only be
+benchmarked where NET_ADMIN is granted (a bare-metal host or a privileged
+environment), which `netem_tcp.py` is ready for.

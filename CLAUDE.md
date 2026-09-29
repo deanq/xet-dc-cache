@@ -156,6 +156,10 @@ Env vars (read in `main.go`): `HF_UPSTREAM`, `CAS_UPSTREAM`, `PUBLIC_BASE`,
 xorb hash — a xorb spanning >N ranged reconstructions needs a deeper list or a
 window's authorizing URL can be evicted → spurious 502), `PORT`,
 `MAX_INFLIGHT_FETCHES` (0 = unlimited; caps concurrent upstream misses),
+`STREAM_CACHE_HITS` (default off; when set, serves cache HITs by streaming the
+file with a header flush — `io.Copy` from disk — instead of buffering the whole
+body then writing it once: O(1) time-to-first-byte and flat per-hit heap. See
+`writeXorbStream` in `xorb.go`),
 `SHIM_AUTH_TOKEN` (empty = open), `PEERS` (comma-separated sibling base URLs;
 empty = peering off), `SELF_URL` (filtered from `PEERS`),
 `PEER_PROBE_TIMEOUT_MS` (default 200), `PEER_STICKY_TTL_SECONDS` (default 60),

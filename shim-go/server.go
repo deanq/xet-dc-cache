@@ -34,6 +34,12 @@ type Server struct {
 	// (the trusted-LAN default). See withAuth in middleware.go.
 	authToken string
 
+	// streamHits, when true, serves a cache HIT by streaming the file (io.Copy +
+	// header flush) instead of buffering the whole body then writing it once.
+	// Cuts time-to-first-byte to O(1) and keeps per-hit heap flat. Off by
+	// default (STREAM_CACHE_HITS=1 enables it). See writeXorbStream.
+	streamHits bool
+
 	// peer groups the entire "Tier 1.5" peering surface (config, per-peer
 	// state, hedge tuning, test seam). Its zero value = peering disabled, so a
 	// Server built without it behaves exactly as a non-peering shim.

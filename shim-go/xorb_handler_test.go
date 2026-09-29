@@ -67,6 +67,45 @@ func TestGetXorbMissThenHit(t *testing.T) {
 	}
 }
 
+// The streamed HIT path (STREAM_CACHE_HITS) must be byte- and header-identical
+// to the buffered path — same 206, X-Cache, Content-Range, Accept-Ranges,
+// Content-Type, and body. Streaming only changes HOW the cached file reaches the
+// client (io.Copy from disk vs whole-body Write), never WHAT reaches it.
+func TestGetXorbStreamingHitParity(t *testing.T) {
+	seed := func() (*Server, *countingDoer) {
+		d := &countingDoer{}
+		s := newXorbTestServer(t, d)
+		s.signed.Set("h", []string{"http://cdn/x"})
+		doGetXorb(s, "h", "bytes=0-4") // MISS -> populate the cache file
+		return s, d
+	}
+
+	sBuf, _ := seed()
+	sBuf.streamHits = false
+	buf := doGetXorb(sBuf, "h", "bytes=0-4")
+
+	sStr, _ := seed()
+	sStr.streamHits = true
+	str := doGetXorb(sStr, "h", "bytes=0-4")
+
+	if buf.Header().Get("X-Cache") != "HIT" || str.Header().Get("X-Cache") != "HIT" {
+		t.Fatalf("both must be HIT: buffered=%s streamed=%s",
+			buf.Header().Get("X-Cache"), str.Header().Get("X-Cache"))
+	}
+	if buf.Code != str.Code {
+		t.Fatalf("code mismatch: buffered=%d streamed=%d", buf.Code, str.Code)
+	}
+	if buf.Body.String() != str.Body.String() || str.Body.String() != "BYTES" {
+		t.Fatalf("body mismatch: buffered=%q streamed=%q", buf.Body.String(), str.Body.String())
+	}
+	for _, h := range []string{"Content-Range", "Accept-Ranges", "Content-Type"} {
+		if buf.Header().Get(h) != str.Header().Get(h) {
+			t.Fatalf("%s mismatch: buffered=%q streamed=%q",
+				h, buf.Header().Get(h), str.Header().Get(h))
+		}
+	}
+}
+
 func TestGetXorbRequiresRange(t *testing.T) {
 	s := newXorbTestServer(t, &countingDoer{})
 	if rec := doGetXorb(s, "h", ""); rec.Code != 400 {

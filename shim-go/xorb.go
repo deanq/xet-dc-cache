@@ -124,7 +124,25 @@ func (s *Server) getXorb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := s.now()
-	if body, err := os.ReadFile(path); err == nil {
+	if s.streamHits {
+		// Stream the cached file straight to the client: time-to-first-byte is
+		// the open (O(1)), not a full read, and per-hit heap stays flat. An open
+		// or stat error falls through to the miss path, exactly as a failed
+		// ReadFile does below.
+		if f, err := os.Open(path); err == nil {
+			if fi, serr := f.Stat(); serr == nil {
+				n := fi.Size()
+				s.lru.Touch(name)
+				s.metrics.Incr("hits", 1)
+				s.metrics.Incr("served_bytes", n)
+				s.metrics.Observe("hit", elapsedMs(start, s.now()))
+				writeXorbStream(w, f, contentRangeForHit(byteRange, n))
+				f.Close()
+				return
+			}
+			f.Close()
+		}
+	} else if body, err := os.ReadFile(path); err == nil {
 		s.lru.Touch(name)
 		s.metrics.Incr("hits", 1)
 		s.metrics.Incr("served_bytes", int64(len(body)))
@@ -226,14 +244,32 @@ func writeCacheFileAtomic(dir, name, path string, body []byte) error {
 	return nil
 }
 
-func writeXorbBytes(w http.ResponseWriter, body []byte, cache, contentRange string) {
-	h := w.Header()
+// setXorbHeaders writes the headers common to every 206 range response, shared
+// by the buffered and streamed serve paths so they stay identical.
+func setXorbHeaders(h http.Header, cache, contentRange string) {
 	h.Set("X-Cache", cache)
 	h.Set("Accept-Ranges", "bytes")
 	h.Set("Content-Type", "application/octet-stream")
 	if contentRange != "" {
 		h.Set("Content-Range", contentRange)
 	}
+}
+
+func writeXorbBytes(w http.ResponseWriter, body []byte, cache, contentRange string) {
+	setXorbHeaders(w.Header(), cache, contentRange)
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = w.Write(body)
+}
+
+// writeXorbStream serves a cache HIT by streaming the file to the client with a
+// header flush before the body, so time-to-first-byte is the open, not a full
+// read. Same headers/status as writeXorbBytes; only body delivery differs
+// (io.Copy from disk vs a buffered whole-body Write).
+func writeXorbStream(w http.ResponseWriter, r io.Reader, contentRange string) {
+	setXorbHeaders(w.Header(), "HIT", contentRange)
+	w.WriteHeader(http.StatusPartialContent)
+	if fl, ok := w.(http.Flusher); ok {
+		fl.Flush()
+	}
+	_, _ = io.Copy(w, r)
 }

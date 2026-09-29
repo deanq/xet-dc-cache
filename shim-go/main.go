@@ -41,6 +41,19 @@ func envFloat(key string, def float64) float64 {
 	return def
 }
 
+// envBool reads a boolean flag. "1", "true", "yes" (any case) are true; anything
+// else (including unset) yields def.
+func envBool(key string, def bool) bool {
+	switch strings.ToLower(os.Getenv(key)) {
+	case "1", "true", "yes":
+		return true
+	case "":
+		return def
+	default:
+		return false
+	}
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
@@ -143,6 +156,7 @@ func main() {
 		signedCandidates: envInt("SIGNED_CANDIDATES_PER_XORB", 8),
 		sem:              sem,
 		authToken:        env("SHIM_AUTH_TOKEN", ""),
+		streamHits:       envBool("STREAM_CACHE_HITS", false),
 		peer: peerEngine{
 			doer:         peerClient,
 			peers:        peers,

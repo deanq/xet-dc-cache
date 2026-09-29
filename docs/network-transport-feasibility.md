@@ -106,7 +106,7 @@ payoff on a synthesized high-BDP link.
   the default, compare a `STREAM_CACHE_HITS=0` (buffered) run against the default
   and diff peak heap.
 
-## Live confirmations (Runpod, 2026-09-28)
+## Live confirmations (Runpod, 2026-09-28 – 09-29)
 
 Both runs on real Runpod hardware; all resources torn down and verified clear
 (no lingering pods/volumes).
@@ -127,6 +127,27 @@ tee as the next memory win; (2) Flash cold-start counts vary run-to-run, so the
 hit/miss mix isn't identical between the two runs. The *isolated* magnitude of the
 serve-path effect is the loopback benchmark above (3.8 GB → 5.5 MB), where only
 the serve path varied.
+
+### Repeat demo A/B on the merged default-on build (2026-09-29)
+
+A second same-binary A/B on the shipped `netfeas` image (streaming toggled
+explicitly per arm), 3 peered CPU pods, burst=8, 1 s scrape:
+
+| run | peak `xet_heap_inuse_bytes` | steady-state warm (exec-only) | workload realized |
+|---|---|---|---|
+| `STREAM_CACHE_HITS=0` (buffered) | **4.0 GB** | 0.39 s (39 warm) | ~100% peer-served, ~0 WAN, 12 cold |
+| `STREAM_CACHE_HITS=1` (streamed) | **2.9 GB** | 0.38 s (48 warm) | 32% peer / 9.7 GB WAN, 15 cold |
+
+Corroborates the first run: **4.0 GB → 2.9 GB** peak heap, and again the streamed
+arm carried the *heavier* miss load (9.7 GB WAN vs ~0) that inflates the residual,
+so the true serve-path saving is larger than the 28 % headline. **Steady-state
+latency is unchanged (0.38 vs 0.39 s)** — confirming streaming is a
+time-to-first-byte and memory win, not a steady-state throughput one. (The
+end-to-end "warm" median of 16–19 s in both arms is Flash queue + scale-out
+overhead on ~48 concurrent tiny jobs, not the cache; the like-for-like number is
+the 0.38 s steady-state.) The two on-hardware runs (4.0→2.2 GB, 4.0→2.9 GB) agree
+on direction; the confound (whole-heap gauge + Flash variance) keeps the isolated
+magnitude in the loopback benchmark.
 
 ### netem TCP-knobs
 

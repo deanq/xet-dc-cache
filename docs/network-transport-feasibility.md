@@ -138,6 +138,17 @@ explicitly per arm), 3 peered CPU pods, burst=8, 1 s scrape:
 | `STREAM_CACHE_HITS=0` (buffered) | **4.0 GB** | 0.39 s (39 warm) | ~100% peer-served, ~0 WAN, 12 cold |
 | `STREAM_CACHE_HITS=1` (streamed) | **2.9 GB** | 0.38 s (48 warm) | 32% peer / 9.7 GB WAN, 15 cold |
 
+The peer/WAN split (32% peer / 9.7 GB WAN vs ~100% peer) is **not caused by
+streaming** — `STREAM_CACHE_HITS` only changes how a local disk-HIT is written to
+the caller, which is downstream of the miss/peer/CDN decision in `getXorb` →
+`fetchFromPeer` → the hedge. Peer% is governed by cross-pod cache-warmth timing:
+a miss is peer-served only if a sibling already cached that `(hash, range)`,
+otherwise the hedge's CDN pull wins and counts as WAN. The streamed arm had more
+cold workers (15 vs 12) and more populate churn (6 vs 5 jobs), so more of its
+misses fired before peers warmed → more WAN. Run-to-run Flash variance, not a
+regression. (If anything streaming *helps* peering: a peer serving over the
+streamed path emits its first byte in O(1), so it beats the hedged CDN more often.)
+
 Corroborates the first run: **4.0 GB → 2.9 GB** peak heap, and again the streamed
 arm carried the *heavier* miss load (9.7 GB WAN vs ~0) that inflates the residual,
 so the true serve-path saving is larger than the 28 % headline. **Steady-state

@@ -196,6 +196,24 @@ discovery. Peer-served bytes count as `peer_bytes`, a hedged CDN win as
 Note: since HF pays CDN egress, hedged CDN bytes are ~free to the operator — the
 hedge dial trades HF-CDN load, not egress dollars.
 
+**Peer transport security — TLS is a topology choice, not missing.** The peer
+scheme is whatever `PEERS` carries: `https://peer:8000` makes every peer GET ride
+TLS, `http://…` is plaintext. The peer transport is already TLS-aware —
+`newPeerTransport` (`peer_transport.go`) disables the HTTP/2 upgrade *because* of
+`https://` peer URLs (the empty non-nil `TLSNextProto` map is what pins H2 off;
+`ForceAttemptHTTP2:false` alone isn't enough for TLS conns), so HTTPS peering
+needs zero code changes. Default deployments run **plaintext on the trusted LAN**,
+the same trust model as the client↔shim hop and `PUBLIC_BASE`'s `http://` default:
+the shim is a trusted-LAN component behind network isolation (`deploy/README.md`).
+Peer **auth and encryption are separate**: `SHIM_AUTH_TOKEN` bearer-gates the peer
+channel (`X-Xet-Peer: 1`) but does not encrypt the wire — over plaintext the token
+itself travels in cleartext, which is fine on an isolated DC backbone and not fine
+across an untrusted hop. So for a cross-DC or otherwise untrusted peer segment the
+action is operational, not a code change: set `PEERS` to `https://` URLs,
+distribute certs, and keep `SHIM_AUTH_TOKEN` set — accepting the TLS CPU/handshake
+cost that the intra-DC path deliberately avoids (see
+`docs/network-transport-feasibility.md`).
+
 Endpoints: `GET /healthz`, `GET /metrics` (JSON), `GET /metrics/prometheus`
 (text exposition, hand-rolled in `prometheus.go`), plus the three protocol
 handlers. Requests pass through `withLogging`→`withAuth` (`middleware.go`):

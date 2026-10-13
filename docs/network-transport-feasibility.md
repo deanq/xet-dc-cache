@@ -170,3 +170,62 @@ knobs. So the peer-path TCP-tuning recommendation stands, but it is an
 infrastructure/host-config action, not a shim change — and it can only be
 benchmarked where NET_ADMIN is granted (a bare-metal host or a privileged
 environment), which `netem_tcp.py` is ready for.
+
+## External corroboration (flux benchmark, 2026-10)
+
+An independent in-house project — `flux`, a QUIC/ICE P2P transfer toolkit —
+benchmarked QUIC against a faithful reproduction of this shim's peer transport
+(`flux`'s `cmd/httpntcp`/`pkg/ntcp`: plaintext HTTP/1.1, HTTP/2 disabled, N
+byte-ranges across N parallel TCP connections — mirroring `peer_transport.go`) on
+the **exact xorb workload** (`(hash, range)` blobs, ~52 MiB each; a 2.9 GiB model
+= 57 range fetches) across real Runpod pods. It reaches our conclusions from the
+other side, and sharpens one.
+
+**Intra-DC / healthy-path — confirms the no-go.** On the small model and same-DC
+paths, N-parallel-TCP HTTP wins on peak throughput; single-connection QUIC managed
+~19 MiB/s vs N-TCP's 131–359 MiB/s (a 13–18× gap) and QUIC's userspace crypto is
+CPU-bound on small pods. flux's report attributes the gap verbatim to the thesis of
+this doc — *N independent congestion windows beat one* — and recommends keeping the
+N-parallel-TCP transport. External validation of Q1, with pod numbers we did not run.
+
+**Cross-DC — a measured sharpening of our "weak-maybe" caveat.** On Runpod's
+cross-DC public-IP DNAT path, N-parallel-TCP HTTP did not merely underperform — it
+**failed the 2.9 GiB model on every run** (fetched 8 of 57 ranges; 49 failed after
+~147 retries), because the DNAT polices the sustained 57-range burst. The only
+transport that completed the big model was **N independent QUIC connections**
+(flux-nconn: 6/6 completions, 60–68 MiB/s on 2 vCPU, 304 MiB/s on 8 vCPU, scaling
+~linearly with cores). This does not overturn the verdict for *this* system: a
+failing cross-DC peer fetch loses the hedge race and the CDN serves it
+(`peer_hedge.go`), so the failure is masked and the CDN hedge remains the cheap
+mitigation. But it means the hedge is carrying more load on a lossy cross-DC path
+than "weak maybe" implied, and the one scenario where QUIC helps is now quantified:
+the winning shape there is **N independent QUIC connections** (re-creating in QUIC
+what the TCP transport already has), never single-connection QUIC — exactly the
+multiplexing inversion called out in the Q1 table.
+
+**Security — independent agreement.** flux's report, considering itself as a
+secure transport for this shim, lands on the same recommendation as this doc and
+`CLAUDE.md`: the low-risk fix for the plaintext peer channel is **TLS on the
+existing transport** (HTTPS peer URLs + pinned certs / `SHIM_AUTH_TOKEN`), which
+keeps the N-connection parallelism and adds encryption — not a protocol swap.
+
+**Two operational Runpod facts to carry forward**, should cross-DC peering ever
+run over public IPs:
+
+- **DNAT concurrency ceiling:** tune parallel connections to ~8–16; 32 failed the
+  big model. A cap on peer fan-out / idle conns per host on that path.
+- **Runpod public-UDP DNAT black-holes GSO-coalesced QUIC sends** (needs
+  `QUIC_GO_DISABLE_GSO`) — another concrete cost on the "if we ever did QUIC"
+  ledger, reinforcing the no-go.
+
+**If genuine cross-DC peer-to-peer (bypassing the CDN) ever becomes a goal,** the
+"prerequisite is N parallel QUIC connections" project is no longer hypothetical:
+flux-nconn is built and measured, and bundles both open items — N-window throughput
+*and* the plaintext security gap (end-to-end TLS 1.3 + cert-fingerprint pinning +
+Runpod-account auth) — in one transport. It is still not the intra-DC answer (N-TCP
+wins and is simpler, with no userspace-crypto CPU cost), but it is a ready candidate
+for the lossy cross-DC case this doc flagged.
+
+_Caveat on the flux numbers: most runs are 2-vCPU CPU-starved pods, so the robust
+finding is the completion/failure pattern and the relative standings, not the
+absolute MiB/s. Source: `flux/docs/benchmarks/{xorb-report,relay-nconn-report,report}.md`._

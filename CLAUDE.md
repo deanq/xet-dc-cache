@@ -212,7 +212,11 @@ across an untrusted hop. So for a cross-DC or otherwise untrusted peer segment t
 action is operational, not a code change: set `PEERS` to `https://` URLs,
 distribute certs, and keep `SHIM_AUTH_TOKEN` set — accepting the TLS CPU/handshake
 cost that the intra-DC path deliberately avoids (see
-`docs/network-transport-feasibility.md`).
+`docs/network-transport-feasibility.md`, whose "External corroboration" section
+folds in the in-house **flux** benchmark — an independent QUIC-vs-N-parallel-TCP
+run on the real xorb workload that confirms the N-TCP win intra-DC and measures the
+incumbent's cross-DC failure mode; raw reports under
+`flux/docs/benchmarks/`).
 
 Endpoints: `GET /healthz`, `GET /metrics` (JSON), `GET /metrics/prometheus`
 (text exposition, hand-rolled in `prometheus.go`), plus the three protocol

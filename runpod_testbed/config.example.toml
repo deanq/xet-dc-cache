@@ -6,9 +6,11 @@ mechanism = "shim"                          # shim | volumecache | modelstore  (
 
 dc = "EU-RO-1"                              # Runpod datacenter id to pin pods/endpoints to
 worker_cpu = "cpu5c-4-8"                    # Flash worker instance flavor (CPU only — no GPU load)
-# Pin newer than Flash's base image (which ships huggingface_hub 1.6.0 + hf_xet
-# 1.3.2): hf_xet 1.3.2 fetches Xet xorbs DIRECTLY from the CAS, ignoring the
-# shim's rewritten reconstruction URLs (bypasses the cache); >=1.6.0 honors them.
+# Vendored into the Flash build artifact at deploy time (runpod-python >= 2.1).
+# hf_xet < 1.6.0 fetches Xet xorbs DIRECTLY from the CAS, ignoring the shim's
+# rewritten reconstruction URLs (bypasses the cache); >= 1.6.0 honors them.
+# Don't list runpod here: the deploying runpod (with VolumeCache) is vendored
+# automatically.
 worker_deps = ["huggingface_hub>=1.32.0", "hf_xet>=1.6.0"]
 # Empty (default) = CPU worker_cpu above. Non-empty = comma-list of GpuGroup/
 # GpuType enum NAMES (e.g. "AMPERE_16,ADA_24"); deploys a GPU endpoint instead

@@ -1,62 +1,58 @@
-# Verified against the installed `runpod-flash` package (Endpoint signature
-# inspected live via `inspect.signature`): cpu/datacenter/workers/idle_timeout/
-# dependencies/env/volume all exist; DataCenter.EU_RO_1 exists as spelled.
+# Flash app on runpod-python >= 2.1 (`runpod.apps`), deployed with
+# `rp flash deploy . --env xet-<runid>` from this directory (provision/flash.py).
+# Verified against the runpod 2.1.0 source: App.queue(name/cpu/gpu/gpu_count/
+# datacenter/workers/idle_timeout/dependencies/mounts/env), NetworkVolume(name,
+# size=, datacenter=), and the deployed queue runtime (runpod-workers/sdk-runtime)
+# which imports this module, finds the FunctionHandle whose spec.name equals
+# FLASH_RESOURCE_NAME by scanning module globals, and calls fn(**job["input"]).
 import os
-from runpod_flash import Endpoint, DataCenter, GpuGroup, GpuType
-from runpod_flash.core.resources.network_volume import NetworkVolume
-# Flash packages this worker/ dir as the deploy root, so timing.py / plan.py are
-# top-level siblings here — NOT importable as runpod_testbed.worker.*.
-from timing import run_download, hf_download, volumecache_download, modelstore_local_read
-from plan import gpu_names, plan_endpoints, upgrade_pkgs
 
-# Pin >= the versions that honor HF_ENDPOINT for Xet xorb fetches. Flash's base
-# image ships huggingface_hub 1.6.0 + hf_xet 1.3.2, and hf_xet 1.3.2 pulls xorbs
-# straight from the CAS (bypassing the shim); >=1.6.0 uses the rewritten URLs.
+from runpod.apps import App, NetworkVolume
+from runpod.apps.gpu import GpuGroup, GpuType
+# rp flash deploy packages this worker/ dir as the project root, so timing.py /
+# plan.py are top-level siblings here — NOT importable as runpod_testbed.worker.*.
+from timing import run_download, hf_download, volumecache_download, modelstore_local_read
+from plan import APP_NAME, gpu_names, plan_endpoints
+
+# Vendored into the build artifact at deploy time; the runtime puts the artifact's
+# env/ first on sys.path, so these pins (>= the hf_xet that honors HF_ENDPOINT for
+# xorb fetches) are what the worker imports — no cold-start pip upgrade needed.
 _DEPS = os.environ.get("WORKER_DEPS", "huggingface_hub>=1.32.0,hf_xet>=1.6.0").split(",")
 _CPU = os.environ.get("WORKER_CPU", "cpu5c-4-8")
-# Non-empty WORKER_GPU switches every _mk endpoint from cpu= to gpu= (Model
-# Store staging is GPU-only). Empty (default) preserves today's CPU behavior.
+_DC = os.environ.get("WORKER_DC", "EU-RO-1")
+# Non-empty WORKER_GPU switches every endpoint from cpu= to gpu= (Model Store
+# staging is GPU-only). Empty (default) keeps CPU endpoints.
 _GPU_NAMES = gpu_names(os.environ)
 _MAX = int(os.environ.get("WORKER_MAX", "4"))
 _HF_TOKEN = os.environ.get("HF_TOKEN", "")
 _IDLE_TIMEOUT_S = 30
+_VOLUME_MOUNT = "/runpod-volume"   # queue endpoints support one volume, mounted here
 # MECHANISM/MODELS are present at deploy time (provision/flash.py::deploy_env)
 # AND at worker runtime (baked into every endpoint's env by plan_endpoints), so
 # the same bindings exist in both imports. Default "shim" keeps a bare import safe.
 _MECHANISM = os.environ.get("MECHANISM", "shim")
 _MODELS = [m for m in os.environ.get("MODELS", "").split(",") if m]
-_UPGRADED: list = []  # once-flag for the runtime hf_xet upgrade workaround
+_INVOKED: list = []  # once-flag: the first job a worker process serves is its cold one
 
 _DOWNLOADERS = {"shim": hf_download, "baseline": hf_download,
                 "volumecache": volumecache_download, "modelstore": modelstore_local_read}
 
+# FLASH_APP (xet-testbed-<runid>) is set at deploy time by provision/flash.py;
+# the deployed queue runtime never reads the app name, so the default is safe.
+app = App(os.environ.get("FLASH_APP", APP_NAME))
 
-def _upgrade_once(pkgs: list[str]) -> tuple[bool, int]:
-    # WORKER_DEPS does not upgrade the Flash base image's pre-installed packages,
-    # so force-upgrade the ones this downloader needs once at first invocation,
-    # BEFORE they are lazily imported (timing.hf_download / volumecache_download
-    # import huggingface_hub / runpod.serverless lazily). See plan.upgrade_pkgs.
-    import importlib, subprocess, sys, time
-    if _UPGRADED or not pkgs:
-        return False, 0
-    t0 = time.monotonic()
-    subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", *pkgs],
-                   check=False, capture_output=True)
-    # The runpod serverless harness imports runpod.serverless before our handler,
-    # so the pre-upgrade module is cached; drop it so the lazy VolumeCache import
-    # loads the freshly-installed files.
-    if any(p.startswith("runpod") for p in pkgs):
-        importlib.invalidate_caches()
-        for name in [m for m in sys.modules if m == "runpod" or m.startswith("runpod.")]:
-            del sys.modules[name]
-    _UPGRADED.append(True)
-    return True, round((time.monotonic() - t0) * 1000)
+
+def _first_invocation() -> bool:
+    if _INVOKED:
+        return False
+    _INVOKED.append(True)
+    return True
 
 
 def _resolve_gpus(names: list[str]) -> list:
     """WORKER_GPU entries name a GpuGroup or GpuType enum member; resolve each
     against both, in that order, and fail loudly on a typo rather than let
-    Flash's Endpoint(gpu=...) reject it with a less specific error."""
+    app.queue(gpu=...) reject it with a less specific error."""
     gpus = []
     for name in names:
         if name in GpuGroup.__members__:
@@ -68,36 +64,30 @@ def _resolve_gpus(names: list[str]) -> list:
     return gpus
 
 
+def _compute() -> dict:
+    if _GPU_NAMES:
+        return {"gpu": _resolve_gpus(_GPU_NAMES), "gpu_count": 1}
+    return {"cpu": _CPU}
+
+
 def _mk(plan):
-    # The generated deployed handler resolves `flash_app.<func_name>` and CALLS
-    # it as `func(**job_input)` — the job's `input` dict is splatted as kwargs.
-    # So the module-level binding MUST be named exactly the handler __name__.
     download_fn = _DOWNLOADERS[plan.downloader]
-    pkgs = upgrade_pkgs(plan.downloader)
 
     async def handler(**payload) -> dict:
-        cold, dep_upgrade_ms = _upgrade_once(pkgs)
-        return run_download(payload, download_fn,
-                            cold_first_invocation=cold, dep_upgrade_ms=dep_upgrade_ms)
+        return run_download(payload, download_fn, cold_first_invocation=_first_invocation())
 
     handler.__name__ = handler.__qualname__ = plan.binding
-    volume = None
+    mounts = None
     if plan.volume_gb is not None:
-        volume = NetworkVolume(name=plan.env["VOLUME_NAME"], size=plan.volume_gb,
-                               datacenter=DataCenter.EU_RO_1)
-    env = {**plan.env, "HF_TOKEN": _HF_TOKEN}
-    if _GPU_NAMES:
-        return Endpoint(name=plan.name, gpu=_resolve_gpus(_GPU_NAMES), gpu_count=1,
-                        datacenter=DataCenter.EU_RO_1, workers=(0, _MAX),
-                        idle_timeout=_IDLE_TIMEOUT_S, dependencies=_DEPS,
-                        volume=volume, env=env)(handler)
-    return Endpoint(name=plan.name, cpu=_CPU, datacenter=DataCenter.EU_RO_1,
-                    workers=(0, _MAX), idle_timeout=_IDLE_TIMEOUT_S, dependencies=_DEPS,
-                    volume=volume, env=env)(handler)
+        mounts = {_VOLUME_MOUNT: NetworkVolume(plan.env["VOLUME_NAME"], size=plan.volume_gb,
+                                               datacenter=_DC)}
+    return app.queue(name=plan.name, datacenter=_DC, workers=(0, _MAX),
+                     idle_timeout=_IDLE_TIMEOUT_S, dependencies=_DEPS, mounts=mounts,
+                     env={**plan.env, "HF_TOKEN": _HF_TOKEN}, **_compute())(handler)
 
 
-# One module attribute per endpoint (xet_dl_A, xet_dl_baseline, xet_dl_ms_0, ...).
-# Flash's scanner finds Endpoint instances via dir(module), so dynamic bindings work.
+# One module attribute per endpoint (xet_dl_A, xet_dl_baseline, xet_dl_m0, ...).
+# The deployed runtime scans vars(module) for the handle, so dynamic bindings work.
 for _plan in plan_endpoints(_MECHANISM, _MODELS, os.environ):
     globals()[_plan.binding] = _mk(_plan)
 del _plan

@@ -53,7 +53,7 @@ def test_shim_provision_creates_pods_deploys_flash_and_records_state(tmp_path, m
     environ = {"HF_TOKEN": "hf_t", "SHIM_AUTH_TOKEN": "s3", "RUNPOD_API_KEY": "rk"}
     st = ShimMechanism().provision(
         _cfg3(), "r1", fleet=fleet, deploy=lambda env: deploys.append(env),
-        manifest_ids=lambda: {"A": "ep-a", "B": "ep-b", "C": "ep-c", BASELINE_LABEL: "ep-base"},
+        endpoint_ids=lambda env: {"A": "ep-a", "B": "ep-b", "C": "ep-c", BASELINE_LABEL: "ep-base"},
         wait_healthz=lambda addr, timeout_s: None, environ=environ)
     assert [c["name"] for c in fleet.created] == ["xet-cache-r1-A", "xet-cache-r1-B", "xet-cache-r1-C"]
     assert fleet.created[0]["env"]["FLEET_PREFIX"] == "xet-cache-r1-"

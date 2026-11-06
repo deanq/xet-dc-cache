@@ -1,6 +1,6 @@
 """VolumeCache as a Mechanism: one Flash CPU endpoint with a network volume
-attached at /runpod-volume (Flash `Endpoint(volume=NetworkVolume(...))`, built
-in worker/flash_app.py from VOLUME_NAME/VOLUME_GB). The worker mirrors HF_HOME
+attached at /runpod-volume (`app.queue(mounts={"/runpod-volume": NetworkVolume(...)})`,
+built in worker/flash_app.py from VOLUME_NAME/VOLUME_GB; Flash creates it at deploy). The worker mirrors HF_HOME
 onto the volume via runpod.serverless.VolumeCache; the driver runs
 populate -> warm burst per model.
 """
@@ -9,7 +9,9 @@ import os
 
 from runpod_testbed.mechanisms.base import ProvisionState, WorkerSpec, endpoint_name, state_path
 from runpod_testbed.provision.down import cli_undeploy
-from runpod_testbed.provision.flash import deploy_env, flash_deploy, manifest_endpoint_ids, volume_name
+from runpod_testbed.provision.flash import (
+    deploy_env, environment_endpoint_ids, flash_deploy, flash_env_name, volume_name,
+)
 from runpod_testbed.provision.volumes import find_volume_id, list_network_volumes
 
 VOLUME_LABEL = "volumecache"
@@ -35,13 +37,13 @@ class VolumeCacheMechanism:
         return {"mechanism": self.name, "endpoint": VOLUME_LABEL, "model": model,
                 "phase": phase, "replica": replica}
 
-    def provision(self, cfg, runid: str, *, deploy=flash_deploy, manifest_ids=manifest_endpoint_ids,
+    def provision(self, cfg, runid: str, *, deploy=flash_deploy, endpoint_ids=environment_endpoint_ids,
                   list_volumes=list_network_volumes, environ=os.environ) -> ProvisionState:
         state = ProvisionState(mechanism=self.name, runid=runid)
         os.makedirs("data", exist_ok=True)
         state.save(state_path(runid))
         deploy(deploy_env(self.worker_spec(cfg), cfg, environ["HF_TOKEN"], runid))
-        state.endpoints = manifest_ids()
+        state.endpoints = endpoint_ids(flash_env_name(runid))
         vid = find_volume_id(volume_name(runid), list_volumes(environ["RUNPOD_API_KEY"]))
         if vid:
             state.volumes[VOLUME_LABEL] = vid

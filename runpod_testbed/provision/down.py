@@ -1,5 +1,4 @@
 from __future__ import annotations
-import subprocess
 from runpod_testbed.provision.up import State
 
 # Endpoint names deployed by worker/flash_app.py, fixed by the A/B/C overlap
@@ -7,20 +6,14 @@ from runpod_testbed.provision.up import State
 ENDPOINTS = ("xet-dl-A", "xet-dl-B", "xet-dl-C")
 
 
-# Flash tracks deployed endpoints in worker/.flash, so undeploy must run from
-# the same dir up.py deploys from — otherwise `flash undeploy` reports "no
-# endpoints found" and silently leaves the endpoints (and their workers) billing.
-_WORKER_DIR = "runpod_testbed/worker"
-
-
 def cli_undeploy(env_name: str, names: tuple[str, ...] = ENDPOINTS) -> None:
-    # `flash undeploy` deletes by endpoint name (there is no --env); --all would
-    # nuke unrelated endpoints in the account. Tolerate not-found per endpoint
-    # (teardown-on-failure often runs before deploy created them). env_name is
-    # unused by the CLI but kept for the teardown(flash_undeploy=...) contract.
-    for name in names:
-        subprocess.run(["flash", "undeploy", name, "--force"],
-                       cwd=_WORKER_DIR, check=False)
+    """Delete the named endpoints of the run's Flash environment (runpod.apps
+    registry, not local state). Missing env/endpoints are tolerated: teardown-on-
+    failure often runs before deploy created them. Undeploying the whole env
+    (`rp flash undeploy`) would also remove the baseline, which teardown_all
+    handles separately so per-mechanism teardown stays scoped."""
+    from runpod_testbed.provision.flash import undeploy_endpoints
+    undeploy_endpoints(env_name, names)
 
 
 def teardown(fleet, state: State, flash_undeploy=cli_undeploy) -> list[str]:
@@ -42,16 +35,26 @@ from runpod_testbed.provision.volumes import delete_network_volume
 _default_volume_delete = delete_network_volume   # best-effort REST DELETE; 404 tolerated
 
 
-def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None) -> list[str]:
-    """Mechanism resources -> baseline endpoint -> network volumes. Best-effort:
+def _default_env_delete(env_name: str, resources: tuple[str, ...]) -> None:
+    from runpod_testbed.provision.flash import delete_environment
+    delete_environment(env_name, resources)
+
+
+def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None,
+                 delete_env=None) -> list[str]:
+    """Mechanism resources -> baseline endpoint -> Flash environment, the run's
+    app and its leaked endpoint templates -> network volumes. Flash never deletes the
+    volumes it creates, so they go last, after every endpoint using them. Best-effort:
     every failure is returned, never raised, so one stuck resource can't stop
     the rest from being torn down (they'd keep billing).
 
     Defaults resolve at call time (module attributes), so tests can monkeypatch
-    `down.cli_undeploy` / `down._default_volume_delete`."""
+    `down.cli_undeploy` / `down._default_volume_delete` / `down._default_env_delete`."""
     from runpod_testbed.mechanisms.base import BASELINE_LABEL, endpoint_name
+    from runpod_testbed.mechanisms.modelstore import REUSED_PREFIX
     flash_undeploy = flash_undeploy or cli_undeploy
     delete_volume = delete_volume or _default_volume_delete
+    delete_env = delete_env or _default_env_delete
     errored = []
     try:
         mech.teardown(state)
@@ -61,6 +64,12 @@ def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None) -> lis
         flash_undeploy(f"xet-{state.runid}", names=(endpoint_name(BASELINE_LABEL),))
     except Exception as e:
         errored.append(f"baseline undeploy: {e}")
+    owned = tuple(endpoint_name(label) for label in state.endpoints
+                  if not label.startswith(REUSED_PREFIX))   # reused modelstore endpoints aren't ours
+    try:
+        delete_env(f"xet-{state.runid}", owned)
+    except Exception as e:
+        errored.append(f"flash env xet-{state.runid}: {e}")
     for label, vid in state.volumes.items():
         try:
             delete_volume(vid)

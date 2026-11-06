@@ -1,9 +1,9 @@
 """Pure plan of which Flash endpoints flash_app.py builds for a mechanism.
 
 Kept SDK-free so it is unit-testable; flash_app.py turns each EndpointPlan into
-a runpod_flash.Endpoint. Flash packages worker/ as the deploy root, so inside
-the worker this module is imported as top-level `plan`, not
-`runpod_testbed.worker.plan`.
+an `app.queue(...)` resource (runpod.apps). `rp flash deploy` packages worker/ as
+the project root, so inside the worker this module is imported as top-level
+`plan`, not `runpod_testbed.worker.plan`.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -12,17 +12,9 @@ from typing import Mapping
 HF_HOME_DEFAULT = "/root/.cache/huggingface"
 SHIM_LABELS = ("A", "B", "C")
 ENDPOINT_PREFIX = "xet-dl"
-# modelstore's downloader is a pure filesystem walk that never imports
-# huggingface_hub/hf_xet, so flash_app's cold-start hf pip-upgrade is pure
-# overhead there — the exact metric modelstore exists to showcase. Every other
-# downloader (baseline, shim, volumecache) does a real HF download and needs it.
-_NO_HF_DOWNLOADERS = frozenset({"modelstore"})
-# WORKER_DEPS cannot override the Flash base image's pre-installed packages, so
-# the needed ones are force-upgraded at first invocation (see flash_app). The
-# base image ships old hf_xet (bypasses the shim) and an old runpod-python
-# (no runpod.serverless.VolumeCache), so volumecache additionally needs runpod.
-_HF_PKGS = ("huggingface_hub>=1.32.0", "hf_xet>=1.6.0")
-_RUNPOD_PKG = "runpod>=1.12.0"  # first version exposing runpod.serverless.VolumeCache
+# Flash app name prefix; each run deploys its own app xet-testbed-<runid>
+# (provision/flash.py::flash_app_name explains why).
+APP_NAME = "xet-testbed"
 
 
 def gpu_names(env: Mapping[str, str]) -> list[str]:
@@ -31,25 +23,10 @@ def gpu_names(env: Mapping[str, str]) -> list[str]:
     return [n.strip() for n in env.get("WORKER_GPU", "").split(",") if n.strip()]
 
 
-def needs_hf_upgrade(downloader: str) -> bool:
-    return downloader not in _NO_HF_DOWNLOADERS
-
-
-def upgrade_pkgs(downloader: str) -> list[str]:
-    """Pip packages flash_app force-upgrades on the worker at first invocation,
-    before their lazy import. Empty for modelstore (pure filesystem read)."""
-    if downloader in _NO_HF_DOWNLOADERS:
-        return []
-    pkgs = list(_HF_PKGS)
-    if downloader == "volumecache":  # VolumeCache comes from runpod-python
-        pkgs.append(_RUNPOD_PKG)
-    return pkgs
-
-
 @dataclass
 class EndpointPlan:
-    name: str            # Flash endpoint name, e.g. xet-dl-A
-    binding: str         # module attribute + handler __name__, e.g. xet_dl_A
+    name: str            # Flash resource == endpoint name, e.g. xet-dl-A
+    binding: str         # module attribute holding the handle, e.g. xet_dl_A
     downloader: str      # key into flash_app._DOWNLOADERS
     env: dict[str, str] = field(default_factory=dict)   # runtime env baked into the endpoint
     volume_gb: int | None = None

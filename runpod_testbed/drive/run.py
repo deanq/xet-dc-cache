@@ -4,13 +4,11 @@
 # endpoints recorded in `ProvisionState`, and records per-job timings to
 # JSONL.
 #
-# flash_manifest.json shape (confirmed 2026-09-22 against a live `flash deploy`
-# output): {"resources": {"xet-dl-A": {"functions": [...], "endpoint_id": "..."},
-# ...}}. `endpoint_ids` below parses that shape, keying each endpoint by the
-# trailing group letter. The resources carry resource_type "CpuLiveServerless"
-# / is_live_resource:true, but that is a manifest scan-time artifact — because
-# they are is_load_balanced:false, Flash deploys them as queue-based endpoints
-# invoked via runpod.Endpoint(eid).run()/.runsync() (the `/runsync` path).
+# Endpoint ids come from ProvisionState (provision/flash.py reads them back
+# from the Flash 2.1 app environment). The `@app.queue` resources are plain
+# queue-based endpoints: a deployed worker calls the handler with the job's
+# `input` dict as kwargs, so they are invoked with the stock
+# runpod.Endpoint(eid).run({"input": {...}}) data-plane API.
 from __future__ import annotations
 import argparse
 import concurrent.futures
@@ -28,15 +26,6 @@ def expand_jobs(overlap: dict, burst: int) -> list:
             for r in range(burst):
                 warm.append({"group": g, "model": m, "phase": "warm", "replica": r})
     return cold + warm
-
-
-def endpoint_ids(manifest: dict) -> dict:
-    # Flash writes {"resources": {"xet-dl-A": {..., "endpoint_id": "..."}}}.
-    # Key each endpoint by the trailing group letter (xet-dl-A -> "A").
-    out = {}
-    for res_name, res in manifest.get("resources", {}).items():
-        out[res_name.rsplit("-", 1)[-1]] = res["endpoint_id"]
-    return out
 
 
 def start_jobs_file(path: str) -> None:

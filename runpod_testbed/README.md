@@ -149,11 +149,13 @@ easy to get wrong:
   deployed with `HF_ENDPOINT` set to its paired pod's public address, so a stock
   `hf_hub_download` on the worker transparently routes all traffic through the
   shim. No image or client changes.
-- **The hf_xet force-upgrade.** Flash's base image ships `hf_xet 1.3.2`, which
-  fetches Xet xorbs *directly from the CAS* and ignores the shim's rewritten
-  URLs — silently bypassing the cache. The worker handler force-upgrades to
-  `hf_xet ≥ 1.6.0` on its first invocation so xorb bytes actually flow through
-  the pod. (Proper fix is upstream in Flash; see the memory note.)
+- **The hf_xet pin.** `hf_xet < 1.6.0` fetches Xet xorbs *directly from the
+  CAS* and ignores the shim's rewritten URLs — silently bypassing the cache.
+  `worker_deps` pins `hf_xet ≥ 1.6.0`; Flash (runpod-python ≥ 2.1) vendors
+  the pinned deps into the build artifact at deploy time and the worker
+  runtime puts that `env/` first on `sys.path`, so the pin is what the worker
+  imports. (The standalone `runpod-flash` base image shipped `hf_xet 1.3.2`
+  and needed a cold-start pip force-upgrade; that workaround is gone.)
 
 ## How the workload runs
 
@@ -201,9 +203,12 @@ with total WAN eliminated in the tens of GB across the fleet.
 - `RUNPOD_API_KEY` with permission to create pods and deploy Flash endpoints.
 - A throwaway/scoped `HF_TOKEN` — see the plaintext-token warning below.
 - A container registry you can push to (for the cache-pod image only).
-- `uv tool install runpod-flash` (puts the `flash` CLI on `PATH`). The
-  `runpod` Python client used by the scripts is pulled per-invocation via
-  `uv run --with runpod ...` below — no global install.
+- Nothing Flash-specific to install: Flash ships inside **runpod-python ≥ 2.1**
+  (`runpod.apps` + the `rp flash` CLI). The Makefile pulls it per-invocation
+  via `uv run --with 'runpod>=2.1.0' ...` and invokes the CLI as
+  `python -m runpod.rp_cli.main flash ...` (the `rp` console script) through
+  that same interpreter — no global install, and the standalone
+  `runpod-flash` package / `flash` CLI is no longer used.
 - Go toolchain for `make build-linux` (repo root `Makefile`).
 
 ## COST WARNING
@@ -243,19 +248,38 @@ instance type will silently force GPU workers (cost + capacity
 implications) — treat a region change as a deliberate config + Task-3
 worker change, not a one-line edit.
 
-## Flash artifact limit
+## Flash app layout and artifact limit
 
-Flash's packaged-function upload has a **500 MB** artifact limit. The
-worker handler (`worker/flash_app.py` + `worker/timing.py`) only needs
-`huggingface_hub`/`hf_xet` plus stdlib, so it is comfortably under this —
-do not add heavy deps (torch, transformers, etc.) to `worker_deps` in
-`config.toml` or the 500 MB limit will bite.
+`worker/` is a Flash app. Each run deploys it as its **own** app,
+`xet-testbed-<runid>`, into environment `xet-<runid>`:
+`rp flash deploy . --env xet-<runid>` (run from `runpod_testbed/worker/`, with
+`FLASH_APP` set) discovers it, vendors `worker_deps` for linux into the
+artifact, and creates one queue endpoint per `@app.queue` resource
+(`xet-dl-A`, `xet-dl-baseline`, ...). Flash 2.1 keeps **no local state** (no
+`.flash/` manifest): `provision/flash.py` reads endpoint ids back from the
+environment in the app registry, and `down` deletes the run's endpoints, the
+environment, the app, then the endpoint templates. Flash never deletes network
+volumes it creates, so `down` deletes those by id (REST) last.
+
+**Known runpod-python 2.1.0 issue — leaked endpoint templates.** Deploy names
+each endpoint template `<app>-<resource>-template`, and undeploy deletes only
+the endpoints. The platform keeps each template "held by deleted endpoint
+<id>, pending cleanup" for up to ~90 min, so redeploying the same app name in
+that window fails with `endpoint template names must be unique` — hence the
+per-run app name. `down` tries to delete the templates and, inside that
+window, reports them as tolerated errors; delete them later with
+`mutation { deleteTemplate(templateName: "<name>") }` (REST
+`DELETE /v1/templates/<id>` answers 500 "template not found" for them).
+
+The vendored artifact is capped at **1500 MB** (`runpod.apps.build.MAX_ARTIFACT_MB`).
+The worker only needs `huggingface_hub`/`hf_xet` plus stdlib, so it is far
+under — do not add heavy deps (torch, transformers, etc.) to `worker_deps`.
 
 ## Run recipe
 
 All commands run from the **repo root** (`xet-dc-cache/`) unless noted —
 `drive/run.py` and `up.py` read/write paths relative to cwd
-(`runpod_testbed/worker/.flash/flash_manifest.json`, `data/*.json`).
+(`data/*.json`).
 
 ### 1. Build the cache-shim Linux binary
 
@@ -279,26 +303,16 @@ docker push <registry>/xet-cache-testbed:latest
 `linux/amd64` from the repo root — so step 1 is optional when you use it.
 Set `IMAGE` to match your `config.toml` `cache_image`. The **worker side
 needs no image at all** — Flash packages `worker/flash_app.py` and its
-declared deps directly from source at `flash deploy` time.
+declared deps directly from source at `rp flash deploy` time (onto the
+`runpod/queue:py<ver>-latest` runtime image).
 
-### 3. Install and authenticate the Flash CLI
+### 3. Scaffold
 
-`make -C runpod_testbed setup` does the mechanical parts of steps 3–4 for
-you (installs the `flash` CLI if missing, scaffolds `config.toml`), then
-prints the manual steps below. Or do it by hand:
-
-```bash
-uv tool install runpod-flash   # installs the `flash` CLI onto PATH
-flash login                    # authenticates the flash CLI with Runpod
-```
-
-`flash login` handles the **flash CLI's** Runpod credential for you (it's
-what `up.py` shells out to for `flash deploy`). It does **not** cover the
-`runpod-python` SDK path — `up.py`/`down.py`/`scrape.py` construct a
-`Fleet()` that reads `RUNPOD_API_KEY` from the environment (step 5), and
-that key is also injected into each pod so its self-config can resolve peer
-addresses. So `flash login` + `RUNPOD_API_KEY` in the env cover the two
-halves; you don't configure the key for the CLI twice.
+`make -C runpod_testbed setup` scaffolds `config.toml` (step 4) and prints
+the manual steps. There is no Flash CLI to install or log into: `rp flash
+deploy` and the SDK both read `RUNPOD_API_KEY` from the environment (step 5),
+which is also injected into each pod so its self-config can resolve peer
+addresses.
 
 ### 4. Configure the run
 
@@ -312,13 +326,12 @@ $EDITOR runpod_testbed/config.toml   # fill in registry, cache_image, models, ov
 ### 5. Export secrets
 
 ```bash
-export RUNPOD_API_KEY=...    # for the runpod-python SDK (Fleet) + injected into pods
+export RUNPOD_API_KEY=...    # runpod SDK (Fleet, rp flash deploy, teardown) + injected into pods
 export HF_TOKEN=...          # throwaway/scoped — see warning above
 export SHIM_AUTH_TOKEN=...   # arbitrary bearer secret for the peer channel
 ```
 
-(`flash login` in step 3 already handled the flash CLI's copy of the key —
-`RUNPOD_API_KEY` here is for the SDK-driven provisioning/teardown/scrape.)
+(Or put them in `runpod_testbed/.env`; every Makefile recipe sources it.)
 
 ### 6. Provision the fleet
 
@@ -328,8 +341,8 @@ make -C runpod_testbed up
 
 Creates 3 EU-RO-1 CPU pods (one per overlap group), waits for each to
 report a public address and a green `/healthz`, then runs
-`flash deploy --env xet-<runid>` from `runpod_testbed/worker/` to stand up
-3 Flash CPU endpoints wired to the pods' addresses. On success it prints
+`rp flash deploy . --env xet-<runid>` from `runpod_testbed/worker/` to stand up
+3 Flash CPU endpoints (plus the baseline) wired to the pods' addresses. On success it prints
 `UP runid=... pods=[...] flash_env=... addrs={...}` and writes
 `data/state-<runid>.json`. **Note the `<runid>` — it is generated
 internally (a timestamp), not something you choose.** On any failure it
@@ -367,9 +380,8 @@ make -C runpod_testbed drive RUNID=<runid>
 
 Expands `config.toml`'s `overlap` matrix into cold (one download per
 group/model) then warm-burst (`burst` concurrent repeats) jobs, submits
-them to the 3 Flash endpoints (resolved from
-`runpod_testbed/worker/.flash/flash_manifest.json` — see known unknowns
-below), and appends per-job timing rows to `data/jobs-<runid>.jsonl`.
+them to the 3 Flash endpoints (ids recorded in `data/state-<runid>.json`
+at `up` time, read from the Flash environment), and appends per-job timing rows to `data/jobs-<runid>.jsonl`.
 
 ### 10. Generate the report
 
@@ -382,9 +394,10 @@ produces latency-by-phase, peering-payoff, and (for the shim) **Peak shim heap**
 (`xet_heap_inuse_bytes`, the streaming-vs-buffered signal) summaries.
 
 Each job's worker result also carries `cold_first_invocation` (bool, set on
-the very first invocation of a given Flash endpoint, before `_UPGRADED` is
-set — see `worker/flash_app.py`) and `dep_upgrade_ms` (wall time spent
-force-upgrading `hf_xet`/`huggingface_hub` on that cold call, 0 otherwise).
+the first job a worker process serves — see `worker/flash_app.py`) and
+`dep_upgrade_ms` (always 0 since the move to runpod-python 2.1 Flash: deps
+are vendored at deploy time, so there is no cold-start pip upgrade; the field
+is kept so older `data/jobs-*.jsonl` stay comparable).
 `report.py`'s **"Cold-start vs steady-state"** section splits job wall times
 into cold (`cold_first_invocation=True`) vs warm buckets using these fields
 and reports the mean dep-upgrade cost paid once per endpoint — separating
@@ -397,7 +410,9 @@ steady-state cache-hit numbers in "Latency by phase" below it.
 make -C runpod_testbed down RUNID=<runid>
 ```
 
-`flash undeploy`s the endpoints and terminates all pods, tolerating errors
+deletes the run's Flash endpoints, environment (and the `xet-testbed` app
+once no other run's environment is left), terminates all pods, and deletes
+any network volume, tolerating errors
 on either side (so a partially-torn-down state can be safely re-run against
 the same state file). **This step is mandatory — do not skip it.**
 
@@ -406,19 +421,9 @@ the same state file). **This step is mandatory — do not skip it.**
 These are documented, unit-tested assumptions that could not be verified
 without a live Runpod/Flash account. Each has a named fallback if wrong.
 
-1. **`flash_manifest.json` shape.** `drive/run.py`'s `endpoint_ids()`
-   assumes `runpod_testbed/worker/.flash/flash_manifest.json` has the shape
-   `{"endpoints": [{"function": "xet-dl-A", "endpoint_id": "..."}]}`. A
-   best-effort read of Flash's public docs/source suggests the real
-   manifest may instead carry a `functions[]` array (name/module/
-   resource_name/routes) plus a `resources[]` array, with function-name ->
-   endpoint_id resolution happening at call time via a separate State
-   Manager GraphQL lookup rather than a static list baked into the
-   manifest file. **On the first live `flash deploy`, inspect
-   `runpod_testbed/worker/.flash/flash_manifest.json` directly** and, if it
-   doesn't match the assumed shape, adjust `endpoint_ids()` in
-   `drive/run.py` (and its unit test in `tests/test_drive.py`) before
-   trusting any endpoint calls made from it.
+1. **Flash endpoint-id resolution** (resolved by the runpod-python 2.1
+   migration): there is no local manifest any more; ids come from
+   `runpod.apps.manage.get_environment("xet-testbed", "xet-<runid>")`.
 2. **`Fleet.list_pods_by_prefix` GraphQL shape.** `provision/fleet.py`
    queries `myself { pods { ... } }` to discover sibling pods by name
    prefix. Confirm the field names/nesting against a real GraphQL response
@@ -428,14 +433,12 @@ without a live Runpod/Flash account. Each has a named fallback if wrong.
    pinning to EU-RO-1 (the resolved kwarg name/value from Task 1) actually
    succeeds under real account capacity/quota — a capacity shortfall in
    that single DC would block `up.py` with no fallback region.
-4. **`flash deploy` cwd.** `up.py` runs `flash deploy --env <flash_env>`
-   with `cwd="runpod_testbed/worker"`, i.e. repo-root-relative. Confirm the
-   Flash CLI's packaging step picks up `worker/flash_app.py` and
-   `worker/timing.py` correctly from that cwd, and that
-   `uv tool install runpod-flash` put a `flash` binary on `PATH` for the
-   environment `up.py` inherits (it passes through `os.environ` plus the
-   deploy env). If `flash` isn't found, run `uv tool update-shell` or add
-   `~/.local/bin` to `PATH`.
+4. **`rp flash deploy` cwd.** `provision/flash.py` runs
+   `python -m runpod.rp_cli.main flash deploy . --env xet-<runid>` with
+   `cwd="runpod_testbed/worker"`; the deploy target is that dir, so the
+   artifact root holds `flash_app.py`/`timing.py`/`plan.py` as top-level
+   modules (pinned offline by `tests/test_flash.py`, which runs the same
+   discovery + manifest build as the CLI).
 
 ## Validated run
 
@@ -447,9 +450,9 @@ measurements, an operator should run the recipe above once with
 `max_pods=3`, `burst=2`, and small/fast models, and confirm:
 
 - [ ] All 3 EU-RO-1 pods reach a green `/healthz` within `up.py`'s timeout.
-- [ ] `flash deploy` provisions exactly 3 CPU endpoints without error.
+- [ ] `rp flash deploy` provisions the 3 CPU endpoints + baseline without error.
 - [ ] The known unknowns above (manifest shape, GraphQL pod-list shape,
-      EU-RO-1 capacity, `flash deploy` cwd/packaging) all resolve as
+      EU-RO-1 capacity, `rp flash deploy` cwd/packaging) all resolve as
       assumed — or the code has been adjusted to match reality.
 - [ ] `drive/run.py --dry-run <cache_url> dryrun` downloads succeed through
       a pod before spending any Flash invocations.
@@ -470,24 +473,24 @@ repo root):
 
 ```bash
 # test
-uv run --with pytest --with pyarrow pytest runpod_testbed/tests -v
+uv run --with pytest --with pyarrow --with 'runpod>=2.1.0' pytest runpod_testbed/tests -v
 # image        (build-linux first: it drops xetcache-linux-amd64 at repo root)
 make build-linux && docker build --platform linux/amd64 \
   -f runpod_testbed/provision/cache.Dockerfile -t <registry>/xet-cache-testbed:latest .
 # up   (run as a module so the repo root is on sys.path — a bare
 #       `uv run path/to/up.py` puts the script's dir on the path instead
 #       and `import runpod_testbed` fails)
-uv run --with runpod python -m runpod_testbed.provision.up runpod_testbed/config.toml
+uv run --with 'runpod>=2.1.0' python -m runpod_testbed.provision.up runpod_testbed/config.toml
 # dry-run
 uv run --with huggingface_hub --with hf_xet \
   python -m runpod_testbed.drive.run --dry-run http://<pod-addr>:8000 dryrun
 # scrape
-uv run --with runpod --with pyarrow \
+uv run --with 'runpod>=2.1.0' --with pyarrow \
   python -m runpod_testbed.harvest.scrape data/state-<runid>.json
 # drive
-uv run --with runpod python -m runpod_testbed.drive.run runpod_testbed/config.toml <runid>
+uv run --with 'runpod>=2.1.0' python -m runpod_testbed.drive.run runpod_testbed/config.toml <runid>
 # report
 uv run --with pyarrow --with matplotlib python -m runpod_testbed.harvest.report <runid>
 # down
-uv run --with runpod python -m runpod_testbed.provision.down data/state-<runid>.json
+uv run --with 'runpod>=2.1.0' python -m runpod_testbed.provision.down data/state-<runid>.json
 ```

@@ -50,7 +50,7 @@ def test_provision_owned_path_deploys_per_model_endpoints_and_declares_models(
     monkeypatch.setattr(modelstore, "set_model_references", fake_set_model_references)
     st = ModelStoreMechanism().provision(
         load_str(_MS), "r1", deploy=lambda env: deploys.append(env),
-        manifest_ids=lambda: {"m0": "e0", "m1": "e1", BASELINE_LABEL: "eb"}, environ=_ENV)
+        endpoint_ids=lambda env: {"m0": "e0", "m1": "e1", BASELINE_LABEL: "eb"}, environ=_ENV)
     assert deploys[0]["MECHANISM"] == "modelstore" and deploys[0]["MODELS"] == "org/x@main,org/y@main"
     assert st.endpoints == {"m0": "e0", "m1": "e1", BASELINE_LABEL: "eb"}
     assert declared == [("e0", ["org/x:main"], "rk"), ("e1", ["org/y:main"], "rk")]
@@ -103,7 +103,7 @@ def test_provision_reuse_path_validates_ids_and_deploys_only_baseline(tmp_path, 
 
     st = ModelStoreMechanism().provision(
         load_str(_MS_REUSE), "r2", deploy=lambda env: deploys.append(env),
-        manifest_ids=lambda: {BASELINE_LABEL: "eb"}, graphql=_graphql, environ=_ENV)
+        endpoint_ids=lambda env: {BASELINE_LABEL: "eb"}, graphql=_graphql, environ=_ENV)
     assert deploys[0]["MODELS"] == "" and queries[0][1] == "rk"
     assert st.endpoints == {f"{REUSED_PREFIX}m0": "ep-x", f"{REUSED_PREFIX}m1": "ep-y", BASELINE_LABEL: "eb"}
 
@@ -114,11 +114,11 @@ def test_provision_reuse_path_fails_before_spend_on_unknown_or_partial_ids(tmp_p
     gone = lambda q, key: {"data": {"myself": {"endpoints": [{"id": "ep-x", "name": "n1"}]}}}
     with pytest.raises(ValueError, match="ep-y"):
         ModelStoreMechanism().provision(load_str(_MS_REUSE), "r3", deploy=lambda env: deploys.append(env),
-                                        manifest_ids=lambda: {}, graphql=gone, environ=_ENV)
+                                        endpoint_ids=lambda env: {}, graphql=gone, environ=_ENV)
     partial = load_str(_MS_REUSE.replace('"org/y@main" = "ep-y"\n', ""))
     with pytest.raises(ValueError, match="org/y@main"):
         ModelStoreMechanism().provision(partial, "r4", deploy=lambda env: deploys.append(env),
-                                        manifest_ids=lambda: {}, graphql=gone, environ=_ENV)
+                                        endpoint_ids=lambda env: {}, graphql=gone, environ=_ENV)
     assert deploys == []
 
 

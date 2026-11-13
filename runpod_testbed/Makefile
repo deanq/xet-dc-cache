@@ -134,14 +134,17 @@ demo-up: _preflight
 
 # Run live: scrape (bg) -> drive -> stop scrape (flush) -> report -> print it.
 # A trap tears the fleet down on EXIT — success or failure — so nothing is left
-# billing even if a step fails mid-demo.
+# billing even if a step fails mid-demo. The trap calls a function: $(RUN)
+# carries single quotes, which a single-quoted trap string would split (the
+# `>` in the runpod pin then parses as a redirect and the trap never installs).
 demo-run: _needs-lastrunid
 	@cd $(ROOT) && $(LOADENV) && set -e; \
 	RUNID=$$(cat data/last-runid); \
 	echo "demo-run RUNID=$$RUNID"; \
 	$(RUN) --with pyarrow python -m runpod_testbed.harvest.scrape data/state-$$RUNID.json & \
 	SCRAPE_PID=$$!; \
-	trap 'echo; echo "=== teardown ==="; kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; $(RUN) python -m runpod_testbed.provision.down data/state-$$RUNID.json' EXIT; \
+	teardown() { echo; echo "=== teardown ==="; kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; $(RUN) python -m runpod_testbed.provision.down data/state-$$RUNID.json; }; \
+	trap teardown EXIT; \
 	sleep 2; \
 	$(RUN) python -m runpod_testbed.drive.run $(CONFIG) $$RUNID; \
 	kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; \

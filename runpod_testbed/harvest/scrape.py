@@ -90,14 +90,18 @@ def main() -> None:  # integration: loop scrape all pods -> parquet
     print(f"scrape: {sum(1 for a in addrs.values() if a)} pods, "
           f"interval {interval}s -> {out}", flush=True)
     buf = []
+
+    def _scrape_all() -> None:
+        for pid, a in addrs.items():
+            if a:
+                try:
+                    buf.extend(scrape_once(pid, a))
+                except Exception as e:  # one flaky pod must not stop the run
+                    print(f"scrape: {pid} scrape failed: {e}", flush=True)
+
     try:
         while True:
-            for pid, a in addrs.items():
-                if a:
-                    try:
-                        buf.extend(scrape_once(pid, a))
-                    except Exception as e:  # one flaky pod must not stop the run
-                        print(f"scrape: {pid} scrape failed: {e}", flush=True)
+            _scrape_all()
             # Write every cycle so the parquet survives ANY stop (SIGTERM, SIGKILL,
             # or the process being reaped by a parent) — the report only needs the
             # latest sample per pod, so re-writing the growing buffer is correct.
@@ -105,6 +109,10 @@ def main() -> None:  # integration: loop scrape all pods -> parquet
                 write_metrics(buf, out)
             time.sleep(interval)
     except KeyboardInterrupt:
+        # The report reads the LAST sample per pod; without a final poll the
+        # tail of the run (up to one interval, i.e. the whole warm phase of a
+        # small run) is missing. Pods are still up: teardown runs after us.
+        _scrape_all()
         msg = write_metrics(buf, out) if buf else "scrape: no metrics collected"
         print(msg, flush=True)
 

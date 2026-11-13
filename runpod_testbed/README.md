@@ -205,7 +205,7 @@ with total WAN eliminated in the tens of GB across the fleet.
 - A container registry you can push to (for the cache-pod image only).
 - Nothing Flash-specific to install: Flash ships inside **runpod-python ≥ 2.1**
   (`runpod.apps` + the `rp flash` CLI). The Makefile pulls it per-invocation
-  via `uv run --with 'runpod>=2.1.0' ...` and invokes the CLI as
+  via `uv run --with 'runpod>=2.2.1' ...` and invokes the CLI as
   `python -m runpod.rp_cli.main flash ...` (the `rp` console script) through
   that same interpreter — no global install, and the standalone
   `runpod-flash` package / `flash` CLI is no longer used.
@@ -473,24 +473,24 @@ repo root):
 
 ```bash
 # test
-uv run --with pytest --with pyarrow --with 'runpod>=2.1.0' pytest runpod_testbed/tests -v
+uv run --with pytest --with pyarrow --with 'runpod>=2.2.1' pytest runpod_testbed/tests -v
 # image        (build-linux first: it drops xetcache-linux-amd64 at repo root)
 make build-linux && docker build --platform linux/amd64 \
   -f runpod_testbed/provision/cache.Dockerfile -t <registry>/xet-cache-testbed:latest .
 # up   (run as a module so the repo root is on sys.path — a bare
 #       `uv run path/to/up.py` puts the script's dir on the path instead
 #       and `import runpod_testbed` fails)
-uv run --with 'runpod>=2.1.0' python -m runpod_testbed.provision.up runpod_testbed/config.toml
+uv run --with 'runpod>=2.2.1' python -m runpod_testbed.provision.up runpod_testbed/config.toml
 # dry-run
 uv run --with huggingface_hub --with hf_xet \
   python -m runpod_testbed.drive.run --dry-run http://<pod-addr>:8000 dryrun
 # scrape
-uv run --with 'runpod>=2.1.0' --with pyarrow \
+uv run --with 'runpod>=2.2.1' --with pyarrow \
   python -m runpod_testbed.harvest.scrape data/state-<runid>.json
 # drive
-uv run --with 'runpod>=2.1.0' python -m runpod_testbed.drive.run runpod_testbed/config.toml <runid>
+uv run --with 'runpod>=2.2.1' python -m runpod_testbed.drive.run runpod_testbed/config.toml <runid>
 # report
 uv run --with pyarrow --with matplotlib python -m runpod_testbed.harvest.report <runid>
 # down
-uv run --with 'runpod>=2.1.0' python -m runpod_testbed.provision.down data/state-<runid>.json
+uv run --with 'runpod>=2.2.1' python -m runpod_testbed.provision.down data/state-<runid>.json
 ```

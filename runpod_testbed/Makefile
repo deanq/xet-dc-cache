@@ -29,7 +29,7 @@ IMAGE    ?= xet-cache-testbed:latest
 STATE     = data/state-$(RUNID).json
 # runpod-python >= 2.1 ships Flash (runpod.apps + the `rp flash` CLI); the
 # standalone runpod-flash package / `flash` CLI is no longer used.
-RUNPOD   := runpod>=2.1.0
+RUNPOD   := runpod>=2.2.1
 RUN      := uv run --with '$(RUNPOD)'
 
 # Mechanism under test. Empty = the `mechanism` key in config.toml decides;

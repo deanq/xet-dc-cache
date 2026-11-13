@@ -6,11 +6,12 @@ state (no .flash manifest): the app registry is the source of truth, so
 endpoint ids are read back from the environment after deploy, and teardown
 deletes by environment, then the app, then the endpoint templates it leaks.
 
-Why an app per run (not one shared app with an env per run): 2.1.0 names each
-endpoint template `<app>-<resource>-template` and undeploy leaves it held by
-the deleted endpoint for up to ~90 min, so a second deploy of the same app
-name within that window fails ("endpoint template names must be unique").
-See provision/templates.py.
+Why an app per run (not one shared app with an env per run): runpod-python
+2.2 (#696) fixed the redeploy collision that first forced this (2.1.0 reused
+`<app>-<resource>-template`, held ~90 min after undeploy), but the per-run app
+is still what makes teardown safe on a shared account: the app can be deleted
+outright, and its leaked templates are found by the `<app>-` name prefix
+(provision/templates.py), which only this run can own.
 """
 from __future__ import annotations
 import asyncio
@@ -122,15 +123,13 @@ def undeploy_endpoints(env_name: str, names: tuple[str, ...]) -> None:
         raise RuntimeError("; ".join(failures))
 
 
-async def _delete_environment(env_name: str, resources: tuple[str, ...]) -> list[str]:
+async def _delete_environment(env_name: str) -> list[str]:
     from runpod.apps.api import AppsApiClient
     from runpod.apps.manage import AppNotFound, get_app, undeploy_environment
     client = AppsApiClient()
     app_name = flash_app_name(env_name)
     env = await _environment(env_name, api=client)
-    names = set(resources)
     if env is not None:
-        names |= {ep["name"] for ep in env.get("endpoints") or []}
         result = await undeploy_environment(app_name, env_name, api=client)
         if result.failures:
             return result.failures
@@ -140,13 +139,13 @@ async def _delete_environment(env_name: str, resources: tuple[str, ...]) -> list
         app = None
     if app is not None and not app.get("flashEnvironments"):
         await client.delete_app(app["id"])
-    return delete_flash_templates(app_name, sorted(names))
+    return delete_flash_templates(app_name)
 
 
-def delete_environment(env_name: str, resources: tuple[str, ...] = ()) -> None:
+def delete_environment(env_name: str) -> None:
     """Undeploy every remaining endpoint in the run's environment, delete the
-    environment and the run's app, then the templates of `resources` (endpoint
-    names; the env's own endpoints are added automatically)."""
-    failures = asyncio.run(_delete_environment(env_name, tuple(resources)))
+    environment and the run's app, then every template the app left behind
+    (a still-held template is reported by exact name)."""
+    failures = asyncio.run(_delete_environment(env_name))
     if failures:
         raise RuntimeError("; ".join(failures))

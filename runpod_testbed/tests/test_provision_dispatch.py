@@ -46,7 +46,7 @@ def test_teardown_all_runs_mechanism_then_baseline_then_env_then_volumes_and_tol
         order.append("baseline")
 
     errored = teardown_all(mech, st, flash_undeploy=_undeploy, delete_volume=_delete,
-                           delete_env=lambda env, res: order.append(f"env:{env}"))
+                           delete_env=lambda env: order.append(f"env:{env}"))
     assert mech.torn_down == ["r"]
     assert order == ["baseline", "env:xet-r", "volume", "volume"]  # volumes after every endpoint
     assert undeployed == [("xet-dl-baseline",)]
@@ -65,7 +65,7 @@ def test_teardown_all_uses_module_default_when_delete_volume_not_given(monkeypat
     deleted = []
     monkeypatch.setattr(down, "_default_volume_delete", lambda vid: deleted.append(vid))
     st = ProvisionState(mechanism="fake", runid="r", volumes={"vc": "vol-1"})
-    monkeypatch.setattr(down, "_default_env_delete", lambda env, res: None)
+    monkeypatch.setattr(down, "_default_env_delete", lambda env: None)
     assert teardown_all(_FakeMech(), st, flash_undeploy=lambda env, names: None) == []
     assert deleted == ["vol-1"]
 
@@ -91,7 +91,7 @@ def test_up_main_tears_down_partial_state_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr("runpod_testbed.provision.down.cli_undeploy",
                         lambda env, names: undeployed.append(tuple(names)))
     monkeypatch.setattr("runpod_testbed.provision.down._default_env_delete",
-                        lambda env, res: undeployed.append(env))
+                        lambda env: undeployed.append(env))
     with pytest.raises(RuntimeError, match="exploded"):
         up.main(["cfg.toml"], environ={}, get_mech=lambda name: mech,
                 load_config=_fake_cfg, now=lambda fmt: "r9")
@@ -103,19 +103,10 @@ def test_teardown_all_reports_env_delete_failure_but_still_deletes_volumes():
     deleted = []
     st = ProvisionState(mechanism="fake", runid="r", volumes={"vc": "vol-1"})
 
-    def _boom(env, res):
+    def _boom(env):
         raise RuntimeError("endpoint has running workers")
 
     errored = teardown_all(_FakeMech(), st, flash_undeploy=lambda env, names: None,
                            delete_volume=deleted.append, delete_env=_boom)
     assert deleted == ["vol-1"]
     assert any("xet-r" in e and "running workers" in e for e in errored)
-
-
-def test_teardown_all_passes_owned_endpoint_names_for_template_cleanup():
-    seen = []
-    st = ProvisionState(mechanism="fake", runid="r",
-                        endpoints={"A": "e1", "baseline": "e2", "reused-m0": "e3"})
-    teardown_all(_FakeMech(), st, flash_undeploy=lambda env, names: None,
-                 delete_volume=lambda vid: None, delete_env=lambda env, res: seen.append((env, res)))
-    assert seen == [("xet-r", ("xet-dl-A", "xet-dl-baseline"))]   # reused endpoints aren't ours

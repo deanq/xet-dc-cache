@@ -94,8 +94,8 @@ def fake_registry(monkeypatch):
     async def get_app(app, api=None):
         return {"id": "app-1", "flashEnvironments": client.apps_envs}
 
-    def delete_templates(app, resources):
-        client.deleted_templates.append((app, resources))
+    def delete_templates(app):
+        client.deleted_templates.append(app)
         return []
 
     monkeypatch.setattr(api, "AppsApiClient", lambda: client)
@@ -131,9 +131,9 @@ def test_undeploy_endpoints_tolerates_missing_env(fake_registry):
 
 def test_delete_environment_removes_env_app_and_leaked_templates(fake_registry):
     fake_registry.envs["xet-r1"] = {"id": "env-1", "endpoints": [{"name": "xet-dl-B", "id": "ep-b"}]}
-    flash.delete_environment("xet-r1", ("xet-dl-A",))   # A was already undeployed by name
+    flash.delete_environment("xet-r1")
     assert fake_registry.deleted_endpoints == ["ep-b"] and fake_registry.deleted_apps == ["app-1"]
-    assert fake_registry.deleted_templates == [("xet-testbed-r1", ["xet-dl-A", "xet-dl-B"])]
+    assert fake_registry.deleted_templates == ["xet-testbed-r1"]   # the run's app, by prefix
 
 
 def test_delete_environment_keeps_app_that_still_has_an_env(fake_registry):
@@ -143,9 +143,9 @@ def test_delete_environment_keeps_app_that_still_has_an_env(fake_registry):
 
 
 def test_delete_environment_raises_template_failures(fake_registry, monkeypatch):
-    monkeypatch.setattr(flash, "delete_flash_templates", lambda app, res: ["template t: held"])
+    monkeypatch.setattr(flash, "delete_flash_templates", lambda app: ["template t: held"])
     with pytest.raises(RuntimeError, match="held"):
-        flash.delete_environment("xet-r1", ("xet-dl-A",))
+        flash.delete_environment("xet-r1")
 
 
 def test_env_and_app_names_are_per_run():

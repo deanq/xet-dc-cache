@@ -35,9 +35,9 @@ from runpod_testbed.provision.volumes import delete_network_volume
 _default_volume_delete = delete_network_volume   # best-effort REST DELETE; 404 tolerated
 
 
-def _default_env_delete(env_name: str, resources: tuple[str, ...]) -> None:
+def _default_env_delete(env_name: str) -> None:
     from runpod_testbed.provision.flash import delete_environment
-    delete_environment(env_name, resources)
+    delete_environment(env_name)
 
 
 def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None,
@@ -51,7 +51,6 @@ def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None,
     Defaults resolve at call time (module attributes), so tests can monkeypatch
     `down.cli_undeploy` / `down._default_volume_delete` / `down._default_env_delete`."""
     from runpod_testbed.mechanisms.base import BASELINE_LABEL, endpoint_name
-    from runpod_testbed.mechanisms.modelstore import REUSED_PREFIX
     flash_undeploy = flash_undeploy or cli_undeploy
     delete_volume = delete_volume or _default_volume_delete
     delete_env = delete_env or _default_env_delete
@@ -64,10 +63,8 @@ def teardown_all(mech, state, *, flash_undeploy=None, delete_volume=None,
         flash_undeploy(f"xet-{state.runid}", names=(endpoint_name(BASELINE_LABEL),))
     except Exception as e:
         errored.append(f"baseline undeploy: {e}")
-    owned = tuple(endpoint_name(label) for label in state.endpoints
-                  if not label.startswith(REUSED_PREFIX))   # reused modelstore endpoints aren't ours
     try:
-        delete_env(f"xet-{state.runid}", owned)
+        delete_env(f"xet-{state.runid}")
     except Exception as e:
         errored.append(f"flash env xet-{state.runid}: {e}")
     for label, vid in state.volumes.items():

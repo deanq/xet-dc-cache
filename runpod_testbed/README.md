@@ -261,13 +261,15 @@ environment in the app registry, and `down` deletes the run's endpoints, the
 environment, the app, then the endpoint templates. Flash never deletes network
 volumes it creates, so `down` deletes those by id (REST) last.
 
-**Known runpod-python 2.1.0 issue — leaked endpoint templates.** Deploy names
-each endpoint template `<app>-<resource>-template`, and undeploy deletes only
-the endpoints. The platform keeps each template "held by deleted endpoint
-<id>, pending cleanup" for up to ~90 min, so redeploying the same app name in
-that window fails with `endpoint template names must be unique` — hence the
-per-run app name. `down` tries to delete the templates and, inside that
-window, reports them as tolerated errors; delete them later with
+**Leaked endpoint templates.** Undeploy deletes only the endpoints; the
+platform keeps each endpoint's template "held by deleted endpoint <id>, pending
+cleanup" for up to ~90 min. On runpod-python 2.1.0 that also broke redeploys of
+the same app name (`endpoint template names must be unique`); 2.2 (#696) names
+new templates `<app>-<resource>-template-<6 hex>`, so redeploys work, but the
+held templates still remain. `down` lists the run's templates by the `<app>-`
+prefix (the per-run app name is what makes that prefix ours alone on a shared
+account), tries to delete each, and reports the held ones by exact name as
+tolerated errors; delete them later with
 `mutation { deleteTemplate(templateName: "<name>") }` (REST
 `DELETE /v1/templates/<id>` answers 500 "template not found" for them).
 

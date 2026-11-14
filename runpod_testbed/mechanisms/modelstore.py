@@ -4,7 +4,7 @@ the platform to /runpod-volume/huggingface-cache/hub/... outside the handler.
 The handler only asserts presence + times a local read; the yardstick is the
 driver's end-to-end wall on a scaled-from-zero worker (replica 0 of each burst).
 
-Owned path: `flash deploy` creates xet-dl-m{i}; the cached model is then
+Owned path: `rp flash deploy` creates xet-dl-m{i}; the cached model is then
 declared per Phase 0 finding (b) — manual console step (default) or API.
 Reuse path ([modelstore.endpoints] maps every model to an endpoint id from a
 previous run that already has its model cached): validate the ids, deploy only
@@ -17,7 +17,9 @@ from runpod_testbed.mechanisms.base import (
     BASELINE_LABEL, ProvisionState, WorkerSpec, endpoint_name, state_path,
 )
 from runpod_testbed.provision.down import cli_undeploy
-from runpod_testbed.provision.flash import deploy_env, flash_deploy, manifest_endpoint_ids
+from runpod_testbed.provision.flash import (
+    deploy_env, environment_endpoint_ids, flash_deploy, flash_env_name,
+)
 from runpod_testbed.provision.modelstore_api import set_model_references
 from runpod_testbed.worker.timing import MODELSTORE_ROOT
 
@@ -76,7 +78,7 @@ class ModelStoreMechanism:
                  "phase": "warm", "replica": r}
                 for i, m in enumerate(cfg.models) for r in range(cfg.burst)]
 
-    def provision(self, cfg, runid: str, *, deploy=flash_deploy, manifest_ids=manifest_endpoint_ids,
+    def provision(self, cfg, runid: str, *, deploy=flash_deploy, endpoint_ids=environment_endpoint_ids,
                   graphql=None, environ=os.environ) -> ProvisionState:
         if graphql is None:
             from runpod_testbed.provision.fleet import _graphql as graphql
@@ -89,7 +91,7 @@ class ModelStoreMechanism:
             env["MODELS"] = ""                  # plan_endpoints -> baseline only
         state.save(state_path(runid))
         deploy(env)
-        state.endpoints = {**manifest_ids(), **reused}
+        state.endpoints = {**endpoint_ids(flash_env_name(runid)), **reused}
         state.save(state_path(runid))
         with open("data/last-runid", "w") as fh:
             fh.write(runid)

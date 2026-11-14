@@ -39,7 +39,7 @@ def test_provision_deploys_with_volume_and_records_volume_id(tmp_path, monkeypat
 
     st = VolumeCacheMechanism().provision(
         _cfg(), "r1", deploy=lambda env: deploys.append(env),
-        manifest_ids=lambda: {VOLUME_LABEL: "ep-vc", BASELINE_LABEL: "ep-base"},
+        endpoint_ids=lambda env: {VOLUME_LABEL: "ep-vc", BASELINE_LABEL: "ep-base"},
         list_volumes=_list, environ=_ENV)
     env = deploys[0]
     assert env["MECHANISM"] == "volumecache" and env["VOLUME_GB"] == "50"
@@ -55,7 +55,7 @@ def test_provision_warns_but_succeeds_when_volume_not_found(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     st = VolumeCacheMechanism().provision(
         _cfg(), "r2", deploy=lambda env: None,
-        manifest_ids=lambda: {VOLUME_LABEL: "e", BASELINE_LABEL: "b"},
+        endpoint_ids=lambda env: {VOLUME_LABEL: "e", BASELINE_LABEL: "b"},
         list_volumes=lambda k: [], environ=_ENV)
     assert st.volumes == {}
     out = capsys.readouterr().out

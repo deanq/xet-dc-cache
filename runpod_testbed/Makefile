@@ -4,7 +4,7 @@
 # The scripts run from the repo root (imports resolve as runpod_testbed.*,
 # state lands in ./data), so every recipe cd's there first.
 #
-#   make test                       unit tests (no Runpod, no spend)
+#   make test                       unit tests (no Runpod API calls, no spend)
 #   make image                      build-linux + docker build the cache image
 #   make up [MECHANISM=shim|volumecache|modelstore]   provision mechanism + baseline endpoint
 #   make dry-run CACHE_URL=http://<pod>:8000
@@ -27,7 +27,10 @@ CONFIG_EXAMPLE := runpod_testbed/config.example.toml
 ENV_FILE ?= $(CURDIR)/.env
 IMAGE    ?= xet-cache-testbed:latest
 STATE     = data/state-$(RUNID).json
-RUN      := uv run --with runpod
+# runpod-python >= 2.1 ships Flash (runpod.apps + the `rp flash` CLI); the
+# standalone runpod-flash package / `flash` CLI is no longer used.
+RUNPOD   := runpod>=2.2.1
+RUN      := uv run --with '$(RUNPOD)'
 
 # Mechanism under test. Empty = the `mechanism` key in config.toml decides;
 # set MECHANISM=volumecache|modelstore|shim to override for this invocation.
@@ -48,7 +51,7 @@ LOADENV = { set -a; . "$(ENV_FILE)" 2>/dev/null || true; set +a; }
 
 help:
 	@echo "runpod_testbed — targets (run: make -C runpod_testbed <target>):"
-	@echo "  make setup                     install flash CLI + scaffold config.toml (idempotent)"
+	@echo "  make setup                     scaffold config.toml (idempotent)"
 	@echo "  make test                      unit tests (no Runpod, no spend)"
 	@echo "  make image [IMAGE=...]         build-linux + docker build the cache image"
 	@echo ""
@@ -70,25 +73,23 @@ help:
 	@echo "RUNID is the timestamp 'make up' prints (demo targets read it from data/last-runid)."
 	@echo "Every run costs money until teardown; demo-run always tears down, even on failure."
 
-# One-time, idempotent, non-destructive: installs the flash CLI if missing and
-# scaffolds config.toml from the example without clobbering an existing one.
-# The interactive `flash login` and the env exports can't be done from make —
-# they're printed as the remaining manual steps.
+# One-time, idempotent, non-destructive: scaffolds config.toml from the example
+# without clobbering an existing one. Flash ships inside runpod-python >= 2.1 and
+# every recipe pulls it in via `uv run --with`, so there is no CLI to install.
+# The env exports can't be done from make — they're printed as manual steps.
 setup:
-	@if command -v flash >/dev/null 2>&1; then echo "flash CLI: present"; \
-	else echo "flash CLI: installing via uv..."; uv tool install runpod-flash; fi
 	@cd $(ROOT) && if [ -f $(CONFIG) ]; then echo "config: $(CONFIG) exists (left as-is)"; \
 	else cp $(CONFIG_EXAMPLE) $(CONFIG) && echo "config: created $(CONFIG) from example — edit it"; fi
 	@echo ""
 	@echo "remaining manual steps (make can't do these for you):"
-	@echo "  1. flash login                          # authenticate the flash CLI"
-	@echo "  2. export RUNPOD_API_KEY=...            # runpod-python SDK + pod self-config"
+	@echo "  1. export RUNPOD_API_KEY=...            # runpod SDK, rp flash deploy, pod self-config"
 	@echo "     export HF_TOKEN=...                  # throwaway/scoped HF token"
 	@echo "     export SHIM_AUTH_TOKEN=...           # peer-channel bearer secret"
-	@echo "  3. edit $(CONFIG)   # registry, cache_image, models, overlap"
+	@echo "     (or put them in runpod_testbed/.env)"
+	@echo "  2. edit $(CONFIG)   # registry, cache_image, models, overlap"
 
 test:
-	@cd $(ROOT) && uv run --with pytest --with pyarrow pytest runpod_testbed/tests -v
+	@cd $(ROOT) && uv run --with pytest --with pyarrow --with '$(RUNPOD)' pytest runpod_testbed/tests -v
 
 # build-linux (root Makefile) drops xetcache-linux-amd64 at the repo root, which
 # the Dockerfile COPYs; then build the image from the repo-root context.
@@ -133,14 +134,17 @@ demo-up: _preflight
 
 # Run live: scrape (bg) -> drive -> stop scrape (flush) -> report -> print it.
 # A trap tears the fleet down on EXIT — success or failure — so nothing is left
-# billing even if a step fails mid-demo.
+# billing even if a step fails mid-demo. The trap calls a function: $(RUN)
+# carries single quotes, which a single-quoted trap string would split (the
+# `>` in the runpod pin then parses as a redirect and the trap never installs).
 demo-run: _needs-lastrunid
 	@cd $(ROOT) && $(LOADENV) && set -e; \
 	RUNID=$$(cat data/last-runid); \
 	echo "demo-run RUNID=$$RUNID"; \
 	$(RUN) --with pyarrow python -m runpod_testbed.harvest.scrape data/state-$$RUNID.json & \
 	SCRAPE_PID=$$!; \
-	trap 'echo; echo "=== teardown ==="; kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; $(RUN) python -m runpod_testbed.provision.down data/state-$$RUNID.json' EXIT; \
+	teardown() { echo; echo "=== teardown ==="; kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; $(RUN) python -m runpod_testbed.provision.down data/state-$$RUNID.json; }; \
+	trap teardown EXIT; \
 	sleep 2; \
 	$(RUN) python -m runpod_testbed.drive.run $(CONFIG) $$RUNID; \
 	kill -TERM $$SCRAPE_PID 2>/dev/null || true; wait $$SCRAPE_PID 2>/dev/null || true; \

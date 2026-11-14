@@ -10,7 +10,9 @@ from runpod_testbed.mechanisms.base import (
     BASELINE_LABEL, ProvisionState, WorkerSpec, state_path,
 )
 from runpod_testbed.provision.down import ENDPOINTS, cli_undeploy, teardown
-from runpod_testbed.provision.flash import deploy_env, flash_deploy, manifest_endpoint_ids
+from runpod_testbed.provision.flash import (
+    deploy_env, environment_endpoint_ids, flash_deploy, flash_env_name,
+)
 from runpod_testbed.provision.up import State, flash_deploy_env
 
 POD_WAIT_S = 300
@@ -103,7 +105,7 @@ class ShimMechanism:
                 for j in expand_jobs(cfg.overlap, cfg.burst)]
 
     def provision(self, cfg, runid: str, *, fleet=None, deploy=flash_deploy,
-                  manifest_ids=manifest_endpoint_ids, wait_healthz=_wait_healthz,
+                  endpoint_ids=environment_endpoint_ids, wait_healthz=_wait_healthz,
                   environ=os.environ) -> ProvisionState:
         if fleet is None:
             from runpod_testbed.provision.fleet import Fleet
@@ -127,7 +129,7 @@ class ShimMechanism:
         # 3. deploy the Flash endpoints (A/B/C through their pods + the baseline)
         spec = WorkerSpec(handler="shim", env=flash_deploy_env(state.metrics_urls, cfg, environ["HF_TOKEN"]))
         deploy(deploy_env(spec, cfg, environ["HF_TOKEN"], runid))
-        state.endpoints = manifest_ids()
+        state.endpoints = endpoint_ids(flash_env_name(runid))
         state.save(state_path(runid))
         with open("data/last-runid", "w") as fh:  # demo targets read this instead of a RUNID arg
             fh.write(runid)
